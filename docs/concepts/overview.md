@@ -179,16 +179,16 @@ Events enable:
 Workflows can execute other workflows with different execution modes:
 
 - **nested**: Child shares parent's context
-- **break_away_sync**: Child runs independently, parent waits for result
-- **break_away_async**: Child runs independently, parent waits for start
-- **break_away_detached**: Child runs completely independently
+- **sync**: Child runs independently, parent waits for result
+- **async**: Child runs independently, parent waits for start
+- **detached**: Child runs completely independently
 
 ```yaml
 - workflow:
     wfspec:
       name: child-workflow
       version: 1.0.0
-    child_mode: break_away_sync
+    child_mode: sync
     input_data:
       param: "{{ value }}"
     output_name: child_result

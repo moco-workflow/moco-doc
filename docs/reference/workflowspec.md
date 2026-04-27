@@ -245,7 +245,7 @@ workflow:
   wfspec:
     name: child-workflow            # Reference by name/version
     version: 1.0.0
-  child_mode: break_away_sync       # Execution mode
+  child_mode: sync       # Execution mode
   input_data:                       # Input to child workflow
     param1: "{{ value }}"
   output_name: child_result         # Store child result
@@ -255,16 +255,16 @@ workflow:
 
 | Mode | Behavior |
 |------|----------|
-| `nested` | Child runs in parent's context (shares variables) |
-| `break_away_sync` | Child runs independently, parent waits for result |
-| `break_away_async` | Child runs independently, parent waits for start |
-| `break_away_detached` | Child runs independently, parent doesn't wait |
+| `inline` | Child runs in parent's context (shares variables) |
+| `sync` | Child runs independently, parent waits for result |
+| `async` | Child runs independently, parent waits for start |
+| `detached` | Child runs independently, parent doesn't wait |
 
 **Parameters:**
 - `wfspec`: Workflow specification
   - `name` + `version`: Reference existing workflow
   - `content`: Inline workflow definition
-- `child_mode`: Execution mode (default: "nested")
+- `child_mode`: Execution mode (default: "inline")
 - `execute_options`: Execution options (workflow_id, task_queue, etc.)
 - `input_data`: Input parameters for child
 - `output_name`: Variable to store child result
@@ -276,7 +276,7 @@ workflow:
     wfspec:
       name: process-order
       version: 2.0.0
-    child_mode: break_away_sync
+    child_mode: sync
     input_data:
       order_id: "{{ order_id }}"
       customer: "{{ customer }}"
@@ -297,7 +297,7 @@ workflow:
           transform:
             output_data:
               - result: "{{ x * 2 }}"
-    child_mode: nested
+    child_mode: inline
     input_data:
       x: 42
     output_name: doubled
@@ -1483,7 +1483,7 @@ body:
                     wfspec:
                       name: child-agent
                       version: 1.0.0
-                    child_mode: break_away_async
+                    child_mode: async
                     execute_options:
                       workflow_id: "child-{{ iter_item.agent_id }}"
                     input_data:
@@ -1553,7 +1553,7 @@ Child runs in parent's context (shares variables).
     wfspec:
       name: calculate-tax
       version: 1.0.0
-    child_mode: nested              # Shares parent context
+    child_mode: inline              # Shares parent context
     input_data:
       price: "{{ item_price }}"
     output_name: tax_amount
@@ -1570,7 +1570,7 @@ Child runs independently, parent waits for completion.
     wfspec:
       name: process-order
       version: 1.0.0
-    child_mode: break_away_sync     # Independent, synchronous
+    child_mode: sync     # Independent, synchronous
     input_data:
       order_id: "{{ order_id }}"
       items: "{{ cart_items }}"
@@ -1588,7 +1588,7 @@ Child runs independently, parent waits for start only.
     wfspec:
       name: send-notifications
       version: 1.0.0
-    child_mode: break_away_async    # Independent, async
+    child_mode: async    # Independent, async
     input_data:
       recipients: "{{ email_list }}"
       message: "{{ notification_body }}"
@@ -1606,7 +1606,7 @@ Child runs completely independently.
     wfspec:
       name: analytics-job
       version: 1.0.0
-    child_mode: break_away_detached # Independent, detached
+    child_mode: detached # Independent, detached
     input_data:
       data: "{{ analytics_data }}"
 ```
@@ -1631,7 +1631,7 @@ Define workflow inline instead of by reference.
           transform:
             output_data:
               - sum: "{{ x + y }}"
-    child_mode: nested
+    child_mode: inline
     input_data:
       x: 10
       y: 20
@@ -1647,7 +1647,7 @@ Customize child workflow execution.
     wfspec:
       name: data-processor
       version: 1.0.0
-    child_mode: break_away_sync
+    child_mode: sync
     execute_options:
       workflow_id: "data-proc-{{ batch_id }}"  # Custom workflow ID
       task_queue: high-priority                # Custom task queue
@@ -1669,7 +1669,7 @@ Children can access parent workflow ID and communicate via events.
     wfspec:
       name: child-worker
       version: 1.0.0
-    child_mode: break_away_async
+    child_mode: async
     execute_options:
       workflow_id: "worker-{{ task_id }}"
     input_data:
@@ -1994,7 +1994,7 @@ body:
               wfspec:
                 name: agent-worker
                 version: 1.0.0
-              child_mode: break_away_async
+              child_mode: async
               execute_options:
                 workflow_id: "agent-{{ iter_item['agent_id'] }}-{{ __sys_info__.workflow_id }}"
               input_data:
@@ -2197,7 +2197,7 @@ body:
     wfspec:
       name: calculate-shipping
       version: 1.0.0
-    child_mode: nested
+    child_mode: inline
     input_data:
       weight: "{{ total_weight }}"
       destination: "{{ shipping_address }}"
@@ -2304,7 +2304,7 @@ Use the schema for:
 
 | Mode | Wait Behavior | Context Sharing |
 |------|---------------|-----------------|
-| `nested` | Wait for completion | Shared |
-| `break_away_sync` | Wait for completion | Isolated |
-| `break_away_async` | Wait for start | Isolated |
-| `break_away_detached` | Don't wait | Isolated |
+| `inline` | Wait for completion | Shared |
+| `sync` | Wait for completion | Isolated |
+| `async` | Wait for start | Isolated |
+| `detached` | Don't wait | Isolated |
