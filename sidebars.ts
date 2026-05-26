@@ -34,6 +34,9 @@ const sidebars: SidebarsConfig = {
       label: 'Reference',
       items: [
         'reference/workflowspec',
+        'reference/statements',
+        'reference/state-machines',
+        'reference/events',
       ],
     },
     {
@@ -41,6 +44,9 @@ const sidebars: SidebarsConfig = {
       label: 'Guides',
       items: [
         'guides/development-setup',
+        'guides/writing-workflows',
+        'guides/creating-activities',
+        'guides/testing',
       ],
     },
   ],

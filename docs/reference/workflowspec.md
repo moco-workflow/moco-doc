@@ -383,6 +383,39 @@ emit_event:
 
 ---
 
+#### continue_as_new_if_suggested
+
+Checks whether the runtime suggests restarting the workflow. In Temporal, this prevents event history from growing too large by restarting execution with serialized state.
+
+```yaml
+continue_as_new_if_suggested:
+  name: checkpoint                   # Optional: identifier for logging
+  serialize_data_context: true       # Whether to include data_context in serialized state
+```
+
+**Parameters:**
+- `name`: Optional identifier (for logging)
+- `serialize_data_context`: Whether to serialize data context variables (default: `true`). Set to `false` if context is rebuilt from external state on restart.
+- `condition`: Skip this statement if the expression is falsy (optional)
+
+**Example: Checkpoint after each iteration batch**
+```yaml
+- iteration:
+    iter_type: sequence
+    input_data:
+      - iter_items: "{{ batches }}"
+    body:
+      activity:
+        type: process_batch
+        input_data:
+          batch: "{{ iter_item }}"
+- continue_as_new_if_suggested:
+    name: post-batch-checkpoint
+    serialize_data_context: true
+```
+
+---
+
 ### Composite Statements
 
 Composite statements contain and orchestrate other statements.
