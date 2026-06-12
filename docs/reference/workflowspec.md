@@ -743,7 +743,7 @@ from bs4 import BeautifulSoup
 | `iter_item` | Current item in iteration |
 | `iter_items` | All items in iteration |
 | `__user_info__` | User information object |
-| `__sys_info__` | System information (trace_id, tier, workflow_id, parent_workflow_id, etc.) |
+| `__sys_info__` | System information (trace_id: root trace shared across all child workflows, workflow_id: unique per workflow instance, tier, etc.) |
 
 **Example: Using special variables**
 ```yaml

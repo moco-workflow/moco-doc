@@ -159,7 +159,7 @@ value: "{{ glom(data, 'path.to.nested.value') }}"
 | `__sys_info__` | System information |
 
 **System Info (`__sys_info__`):**
-- `trace_id`: Unique trace identifier
+- `trace_id`: Root trace identifier (shared across parent and all child workflows)
 - `tier`: Execution tier
 - `workflow_id`: Current workflow ID
 - `parent_workflow_id`: Parent workflow ID (if child)
