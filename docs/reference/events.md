@@ -31,8 +31,10 @@ Sends an event to the event bus.
 |-----------|------|----------|-------------|
 | `topic` | string | Yes | Event topic |
 | `data` | object | Yes | Event payload |
+| `event_type` | string | No | Event type for filtering and routing |
 | `target_workflow_id` | string | No | Route event to a specific workflow |
 | `metadata` | object | No | Additional event metadata |
+| `entity_child_workflow` | object | No | Start-or-signal entity child workflow (see below) |
 
 ### Targeting a Specific Workflow
 
@@ -49,6 +51,35 @@ Use `target_workflow_id` to send events directly to another workflow instance ra
 ```
 
 The target workflow must be listening on the same topic with a matching `wait_for` or state machine transition.
+
+### Entity Child Workflow (Start-or-Signal)
+
+Use `entity_child_workflow` to ensure a target entity child workflow is running before sending the event. If the child isn't running, it is started first; if already running, the event is delivered directly.
+
+```yaml
+- emit_event:
+    entity_child_workflow:
+      wfspec:                           # required, same as workflow statement
+        name: "order-entity"
+        version: "1.0.0"              # optional
+      input_data:                     # optional, passed to child on start
+        order_id: "{{ order_id }}"
+      child_mode: "async"             # "async" (default) or "detached"
+    input_data:
+      topic: "order_events"
+      event_type: "add_item"
+      target_workflow_id: "order-entity:{{ order_id }}"
+      data:
+        sku: "{{ item_sku }}"
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `wfspec` | object | required | Workflow spec info (name, version, content) — same as `workflow` statement |
+| `input_data` | object | null | Input data for the child workflow |
+| `child_mode` | string | "async" | "async" or "detached" |
+
+Requires the Temporal runtime (`break_away_child_workflow_client`).
 
 ### Event Metadata
 
