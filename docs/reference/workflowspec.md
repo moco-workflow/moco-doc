@@ -4,17 +4,18 @@
 
 1. [Introduction](#introduction)
 2. [Workflowspec Structure](#workflowspec-structure)
-3. [Statement Types](#statement-types)
+3. [Functions](#functions)
+4. [Statement Types](#statement-types)
    - [Primitive Statements](#primitive-statements)
    - [Composite Statements](#composite-statements)
-4. [Expression Syntax](#expression-syntax)
-5. [Variable Modifiers](#variable-modifiers)
-6. [Conditions](#conditions)
-7. [Activities](#activities)
-8. [State Machines](#state-machines)
-9. [Events](#events)
-10. [Child Workflows](#child-workflows)
-11. [Complete Examples](#complete-examples)
+5. [Expression Syntax](#expression-syntax)
+6. [Variable Modifiers](#variable-modifiers)
+7. [Conditions](#conditions)
+8. [Activities](#activities)
+9. [State Machines](#state-machines)
+10. [Events](#events)
+11. [Child Workflows](#child-workflows)
+12. [Complete Examples](#complete-examples)
 
 ---
 
@@ -70,6 +71,55 @@ body:                               # Main workflow logic (a statement)
 | `input_data` | object | No | Input parameter definitions |
 | `output_name` | string | No | Variable name to return as result |
 | `body` | statement | Yes | Main workflow logic (any statement type) |
+| `functions` | list | No | Reusable functions callable via the `call` statement |
+
+---
+
+## Functions
+
+`functions` lets you define reusable, named units of logic inside a wfspec and invoke them
+with the [`call`](./statements.md#call) statement. A function is a subset of a wfspec and is
+executed as an inline child workflow (fresh context); its return value comes from
+`output_data`.
+
+```yaml
+wfspec_name: math-demo
+wfspec_version: 1.0.0
+
+functions:
+  - function: add                 # function name
+    input_data:
+      a:
+      b:
+    output_data:
+      sum: "{{ a + b }}"
+    body:
+      transform: {}
+
+output_name: result
+
+body:
+  sequence:
+    elements:
+      - call:
+          function: add
+          input_data:
+            a: 1
+            b: 2
+          output_name: result     # -> { "sum": 3 }
+```
+
+**Function fields:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `function` | string | Yes | Function name (referenced by `call`) |
+| `input_data` | object | No | Input parameter definitions |
+| `output_data` | any | No | Return value definition (supports expressions) |
+| `body` | statement | No | Function logic |
+
+Functions are only visible within the defining wfspec, and a function may call sibling
+functions. Recursion is not supported (rejected by the cyclic call-stack guard).
 
 ---
 
@@ -383,12 +433,12 @@ emit_event:
 
 ---
 
-#### continue_as_new_if_suggested
+#### continue_as_new_checkpoint
 
 Checks whether the runtime suggests restarting the workflow. In Temporal, this prevents event history from growing too large by restarting execution with serialized state.
 
 ```yaml
-continue_as_new_if_suggested:
+continue_as_new_checkpoint:
   name: checkpoint                   # Optional: identifier for logging
   serialize_data_context: true       # Whether to include data_context in serialized state
 ```
@@ -409,7 +459,7 @@ continue_as_new_if_suggested:
         type: process_batch
         input_data:
           batch: "{{ iter_item }}"
-- continue_as_new_if_suggested:
+- continue_as_new_checkpoint:
     name: post-batch-checkpoint
     serialize_data_context: true
 ```

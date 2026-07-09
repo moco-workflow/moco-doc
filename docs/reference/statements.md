@@ -145,6 +145,36 @@ To define a workflow inline instead of by name:
 
 ---
 
+### call
+
+Invokes a [function](./workflowspec.md#functions) defined in the enclosing wfspec's
+`functions` list. A `call` is a compact shorthand for a `workflow` statement running in
+`inline` mode: the function executes in a fresh context and its return value is mapped back
+via `output_name` / `output_data`.
+
+```yaml
+- call:
+    function: add          # matches a `function` in the wfspec's `functions`
+    input_data:
+      a: 1
+      b: 2
+    output_name: result
+```
+
+| Parameter | Description |
+|-----------|-------------|
+| `function` | Name of the function to call (required) |
+| `input_data` | Arguments passed to the function; supports expressions |
+| `output_name` | Context variable to store the function's return value |
+| `output_data` | Transform the return value (`_raw_output` holds the raw return) |
+| `condition` | Pre-condition; the call is skipped when it evaluates to false |
+
+Functions may call sibling functions defined in the same wfspec. Recursion (a function
+calling itself, directly or indirectly) is **not** supported — it is rejected by the cyclic
+call-stack guard.
+
+---
+
 ### wait_for
 
 Waits for an event matching filter criteria, or until a timeout.
@@ -194,14 +224,14 @@ Emits an event to the event bus.
 
 ---
 
-### continue_as_new_if_suggested
+### continue_as_new_checkpoint
 
 Checks whether the runtime suggests restarting the workflow (e.g., Temporal event history nearing its size limit). If suggested, serializes workflow state and restarts execution from the beginning with the preserved state.
 
 This is a no-op in the in-memory runtime. In Temporal, it triggers a continue-as-new when the SDK signals that history is getting large.
 
 ```yaml
-- continue_as_new_if_suggested:
+- continue_as_new_checkpoint:
     name: checkpoint-after-processing
     serialize_data_context: true
 ```

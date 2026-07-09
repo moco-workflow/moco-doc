@@ -1,3 +1,4 @@
+It captures states at a different dimension and offload the complex state mangement from application layer to platform layer, and greatly simplified application logic with durability guarantee.
 
 
 ## computational model

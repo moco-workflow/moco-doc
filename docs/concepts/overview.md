@@ -6,6 +6,19 @@ sidebar_position: 1
 
 Understanding Moco's core concepts will help you build powerful and efficient workflows.
 
+
+* **DSL**
+A **Workflowspec** (or **wfspec**) is a YAML-based declarative specification that defines workflow logic in Moco. With Moco workflowspec, your workflow logic can be easily expressed using a mix of **imperative steps**, event driven **state machine**, or declarative **rules engine** in a very flexible and concise way. The Yaml-based DSL also allows embedding sandboxed Python expressiones (with Pandas) to support complex dynamic data transformation.
+
+* **Deployment**
+Moco's DSL approach decouples workflows from the runtime platform. Unlike other engineering-oriented workflow platforms that require heavy-lifting backend deployment for workflow changes, Moco is a business workflow platform that allows user-owned workflows to be deployed separately from the runtime platform. Moco users can deploy their workflows on demand through cli or web console. Moco supports flexible workflow versioning, permission control, and targetting so that workflows can easily shared and composed.
+
+* **Durable Execution**
+Moco provides durable workflow execution out of the box, but the complexity of distributed execution and state management are abstracted away from moco developers.
+Moco achieved this by binding the generic DSL engine with the Open Source Temporalio platform, through a thin intergration layer on top of its activity dispatcher.
+Unlike the common `checkpoint`-based approach for distributed state management (like Langraph), which requires explicit state management logic in workflow, Temporalio's unqique way of capturing/restoring states through IO event history is systematic and provides an application agnostic way for state menagement.
+Alternatively, the DSL engine can also directly run in a desktop app or a micro service to form a light-weight in-process runtime without durability guarantee.
+
 ## Workflowspec
 
 A **workflowspec** is a YAML document that defines a complete workflow. It specifies:
