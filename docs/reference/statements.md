@@ -96,7 +96,7 @@ Executes a registered activity (HTTP call, database query, custom function, etc.
 | `enable_cache` | Enable result caching |
 | `cache_policy` | Cache configuration (TTL, key) |
 
-Built-in activities: `builtin.http_request`, `builtin.delay`, `builtin.now`, `builtin.emit_workflow_event`.
+Built-in activities: `builtin.delay`, `builtin.now`, `builtin.execute_workflow`.
 
 ---
 

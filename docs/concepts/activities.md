@@ -112,22 +112,6 @@ Pause workflow execution:
       duration: 5s      # Seconds: 5s, minutes: 5m, hours: 5h
 ```
 
-### Emit Workflow Event
-
-Send events to the event bus:
-
-```yaml
-- activity:
-    type: builtin.emit_workflow_event
-    input_data:
-      topic: notifications
-      data:
-        message: "Task complete"
-        result: "{{ result }}"
-      target_workflow_id: "{{ parent_id }}"  # Optional
-    output_name: event_result
-```
-
 ### State Persistence
 
 Store and retrieve workflow state:
