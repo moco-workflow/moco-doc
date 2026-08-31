@@ -131,12 +131,12 @@ There are multiple ways of expressing workflows:
 
 **Finite State Machine** - complex workflows can be better modeled as Finite State Machine in a declarative way
 
-- rule engine - declarative list of rules
+- rules engine - declarative list of rules
 
 Imperative vs Declarative:
 
 Imperative - liner logic, DAG
-Declarative - State Machine or Rule Engine
+Declarative - State Machine or Rules Engine
 Logic is much more concise to be expressed in declarative way.
 
 

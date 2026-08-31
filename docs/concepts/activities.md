@@ -33,8 +33,9 @@ Activities allow you to:
       method: GET
       url: https://api.example.com/users/123
     output_name: user_data           # Store result
-    timeout_sec: 30                  # Execution timeout
-    max_retry_attempts: 3            # Retry on failure
+    retry_policy:                    # Timeout & retry (Temporal runtime only)
+      timeout_sec: 30                # Per-attempt execution timeout
+      max_attempts: 3               # Total attempts (initial + retries)
 ```
 
 ## Activity Parameters
@@ -54,8 +55,7 @@ Activities allow you to:
 | `input_data` | dict | Dynamic input (evaluated per execution) |
 | `output_name` | string | Variable to store activity result |
 | `output_data` | list | Transform result before storing |
-| `timeout_sec` | integer | Execution timeout in seconds |
-| `max_retry_attempts` | integer | Number of retries on failure |
+| `retry_policy` | dict | Nested timeout/retry config (Temporal only): `timeout_sec` (per-attempt execution timeout), `schedule_to_close_timeout_sec`, `heartbeat_timeout_sec`, `heartbeat_interval_sec` (heartbeat cadence; heartbeating is enabled only when both `heartbeat_timeout_sec` and `heartbeat_interval_sec` are set), `max_attempts` (total attempts = initial + retries), `initial_interval_sec`, `backoff_coefficient`, `maximum_interval_sec`, `non_retryable_error_types` |
 | `execute_locally` | boolean | Force local execution (bypass Temporal) |
 | `enable_cache` | boolean | Enable result caching |
 | `cache_policy` | dict | Cache configuration |
@@ -82,7 +82,8 @@ Make HTTP requests to external APIs:
         limit: 10
         offset: 0
     output_name: api_response
-    timeout_sec: 30
+    retry_policy:
+      timeout_sec: 30
 ```
 
 ```yaml
@@ -137,16 +138,135 @@ Store and retrieve workflow state:
 
 ### Secret Management
 
-Access secrets securely:
+Access secrets securely. Plaintext secrets never travel between activities.
+
+Most activities that need a secret take a **secret key** instead of the secret itself — for
+example `openai.chat.completions.apikey_secret_key`, `email.send.password_secret_key`,
+`sql.query.connection_string_secret_key` or, nested one level down,
+`llama_index.query.vectordb_info.connection_string_secret_key` and
+`llama_index.query.embed_model_info.apikey_secret_key`. The activity looks the secret up and
+decrypts it internally, so nothing sensitive touches workflow context at all. A bare `NAME`
+resolves a user-scoped secret; `global/NAME` resolves a global one.
+
+Where an activity does not yet support that (for example `http.request.encrypted_auth_token`),
+use `builtin.secret.get`, which returns the secret **still encrypted** — pass that blob straight
+to the activity, which decrypts it internally.
 
 ```yaml
 - activity:
     type: builtin.secret.get
     input_data:
       secret_name: database_password
-      version: latest
+      in_global_ns: false      # optional; true reads the shared global namespace
+      expiration_seconds: 60   # optional; defaults to 60
     output_name: db_password
 ```
+
+The returned secret **expires after `expiration_seconds`** (60 by default), so a copy that
+leaks into logs, events or workflow history cannot be replayed later. Decrypting an expired
+secret fails with `EncryptedDataExpiredError`.
+
+This matters for long-running workflows: a state machine that waits on events for minutes or
+hours must not fetch the secret once at startup and hold it. Re-run `builtin.secret.get` in
+each state that needs it, so every use gets a freshly minted secret. Passing `0` or a negative
+value disables expiration entirely, which restores the old replayable behaviour — use it only
+when re-fetching genuinely isn't possible.
+
+The stored secret itself never expires; only the copy handed to the workflow does.
+
+Secrets share the persistence store with ordinary workflow state, under the reserved
+namespace `secret` (global) or `<user_id>:secret` (per user). The `builtin.state.*`
+activities refuse that namespace with a `ReservedNamespaceError` — including another user's
+`<user_id>:secret` — and omit it from `builtin.state.list_namespaces`. Secrets are reachable
+only through `builtin.secret.*`, so the expiration above cannot be sidestepped by reading the
+stored blob directly.
+
+### Retrieval-Augmented Generation (RAG)
+
+Two activities build and query a vector index over your own documents, so an LLM can answer
+from them instead of from its training data. Documents are chunked and embedded into a
+[pgvector](https://github.com/pgvector/pgvector) table by `llama_index.index_docs`, and
+`llama_index.query` finds the chunks closest to a question.
+
+Both take the same two nested blocks, so build them once in `context` and reuse them — the
+embedding model **must** be identical on both sides, or the similarity scores are meaningless:
+
+```yaml
+context:
+  vectordb_info:
+    connection_string_secret_key: "MOCO_PGVECTOR_CONN"  # postgresql://... in the secret store
+    table_name: "product_docs"                          # physical table is data_product_docs
+  embed_model_info:
+    apikey_secret_key: "MY_LLM_TOKEN"
+    model_name: "text-embedding-3-small"    # or MOCO_LLM_DEFAULT_EMBED_MODEL_NAME
+    embed_dim: 1536                         # must match the model and the existing table
+```
+
+Indexing downloads each URL to a local directory and parses it by file type (`.md`, `.html`,
+`.pdf`, `.txt`, `.docx`, ...). A URL that fails to download is reported in `failed_urls`
+rather than failing the run:
+
+```yaml
+- activity:
+    type: llama_index.index_docs
+    name: index-docs
+    input_data:
+      document_urls: "{{ doc_urls }}"
+      vectordb_info: "{{ vectordb_info }}"
+      embed_model_info: "{{ embed_model_info }}"
+      chunk_size: 1024
+      chunk_overlap: 200
+      overwrite: true                 # replace the table's contents; false appends
+      metadata:                       # attached to every chunk, filterable at query time
+        collection: "product-docs"
+    output_name: index_result         # -> indexed_urls, failed_urls, document_count, node_count
+```
+
+Querying has two modes. `retrieve` returns the matching chunks and nothing else, leaving the
+prompt to you — useful when you want to force citations or a specific refusal:
+
+```yaml
+- activity:
+    type: llama_index.query
+    name: retrieve-chunks
+    input_data:
+      query: "{{ question }}"
+      vectordb_info: "{{ vectordb_info }}"
+      embed_model_info: "{{ embed_model_info }}"
+      top_k: 5
+      response_mode: retrieve
+      filters:
+        collection: "product-docs"
+    output_name: hits     # -> nodes[{node_id, text, score, metadata}], node_count, answer=null
+```
+
+`synthesize` additionally has an LLM write the answer, returning it as `answer` alongside the
+source `nodes`. It needs an `llm_model_info` block (its `apikey_secret_key` defaults to the
+embedding one, since the two usually share a gateway):
+
+```yaml
+- activity:
+    type: llama_index.query
+    name: answer-question
+    input_data:
+      query: "{{ question }}"
+      vectordb_info: "{{ vectordb_info }}"
+      embed_model_info: "{{ embed_model_info }}"
+      llm_model_info:
+        model_name: "{{ chat_model }}"
+      top_k: 5
+      response_mode: synthesize
+    output_name: rag_answer          # -> answer, nodes, node_count
+```
+
+:::note
+`index_docs` writes rows and is **not** retried by default (`max_attempts: 1`) — a retry would
+duplicate chunks. Use `overwrite: true` to make re-runs idempotent. The database needs the
+`vector` extension enabled; `moco-db` does this for you.
+:::
+
+A complete runnable example, contrasting both modes over the same question, lives in
+`moco-examples/rag-demo/`.
 
 ## Config vs Input Data
 
@@ -201,7 +321,8 @@ Set maximum execution time:
     type: builtin.http_request
     input_data:
       url: https://slow-api.com/data
-    timeout_sec: 10     # Timeout after 10 seconds
+    retry_policy:
+      timeout_sec: 10   # Timeout after 10 seconds
     output_name: result
 ```
 
@@ -214,8 +335,9 @@ Configure automatic retries on failure:
     type: builtin.http_request
     input_data:
       url: https://unreliable-api.com/data
-    max_retry_attempts: 5       # Try up to 5 times
-    timeout_sec: 10             # Per-attempt timeout
+    retry_policy:
+      max_attempts: 5          # Total attempts (initial + retries)
+      timeout_sec: 10          # Per-attempt timeout
     output_name: result
 ```
 
@@ -371,8 +493,9 @@ activity_dir.register_provider('myorg.send_email', EmailActivityProvider())
     type: external.api
     input_data:
       url: "{{ endpoint }}"
-    timeout_sec: 30
-    max_retry_attempts: 3
+    retry_policy:
+      timeout_sec: 30
+      max_attempts: 3
     output_name: result
 
 # Check for errors
@@ -429,14 +552,16 @@ async def execute(self, config_data, input_data, context):
     type: builtin.delay
     input_data:
       duration: 1s
-    timeout_sec: 2
+    retry_policy:
+      timeout_sec: 2
 
 # Slow operations
 - activity:
     type: data.process_large_file
     input_data:
       file_path: "{{ file }}"
-    timeout_sec: 300        # 5 minutes
+    retry_policy:
+      timeout_sec: 300      # 5 minutes
 ```
 
 ## Next Steps

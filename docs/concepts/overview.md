@@ -92,8 +92,9 @@ Activities are external functions or services that workflows can invoke:
     input_data:
       method: GET
       url: https://api.example.com/data
-    timeout_sec: 30
-    max_retry_attempts: 3
+    retry_policy:
+      timeout_sec: 30
+      max_attempts: 3
     output_name: api_result
 ```
 
@@ -224,7 +225,7 @@ state_machine:
     - from_state: pending
       to_state: processing
       trigger:
-        event_name: start
+        event_type: start
 ```
 
 State machines provide:

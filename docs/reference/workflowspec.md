@@ -242,8 +242,9 @@ activity:
   input_data:                       # Dynamic input parameters
     url: "{{ api_endpoint }}"
   output_name: response             # Store result in variable
-  timeout_sec: 30                   # Execution timeout
-  max_retry_attempts: 3             # Retry on failure
+  retry_policy:                     # Timeout & retry (Temporal runtime only)
+    timeout_sec: 30                 # Per-attempt execution timeout
+    max_attempts: 3                 # Total attempts (initial + retries)
   enable_cache: true                # Cache result
 ```
 
@@ -254,11 +255,25 @@ activity:
 - `input_data`: Dynamic input (evaluated per execution)
 - `output_name`: Variable to store activity result
 - `output_data`: Transform activity result before storing
-- `timeout_sec`: Execution timeout in seconds
-- `max_retry_attempts`: Number of retries on failure
+- `retry_policy`: Nested timeout/retry configuration (honored by the Temporal runtime only). Sub-fields:
+  - `timeout_sec`: Per-attempt (start-to-close) execution timeout in seconds
+  - `schedule_to_close_timeout_sec`: Optional overall timeout across all attempts
+  - `heartbeat_timeout_sec`: Optional heartbeat timeout (Temporal only)
+  - `heartbeat_interval_sec`: Optional heartbeat cadence (Temporal only). Heartbeating is enabled only when both `heartbeat_timeout_sec` and `heartbeat_interval_sec` are set
+  - `max_attempts`: Total attempts (initial + retries); `0` = unlimited in Temporal
+  - `initial_interval_sec`: Optional initial retry backoff interval
+  - `backoff_coefficient`: Optional exponential backoff multiplier
+  - `maximum_interval_sec`: Optional cap on retry backoff interval
+  - `non_retryable_error_types`: Optional list of error types that skip retries
 - `execute_locally`: Force local execution (bypass Temporal)
 - `enable_cache`: Enable result caching
 - `cache_policy`: Cache policy configuration
+- `async_mode`: Start the activity without blocking. The activity resolves to a token string
+  (`async-activity:<name>:<run id>`, unique per invocation) instead of its result; the result is
+  published to the event bus under that token when the activity finishes. Capture it with
+  `output_name` and reference it as an expression from a `wait_for` or a transition trigger. See
+  [Async activity results](./events.md#async-activity-results)
+- `async_event_topic`: Topic the completion event is published to (default `default`)
 
 **Example: HTTP request**
 ```yaml
@@ -273,7 +288,8 @@ activity:
         order_id: "{{ order_id }}"
         total: "{{ total }}"
     output_name: api_response
-    timeout_sec: 30
+    retry_policy:
+      timeout_sec: 30
 ```
 
 **Example: Delay activity**
@@ -426,8 +442,8 @@ emit_event:
     input_data:
       topic: child_events
       target_workflow_id: "{{ __sys_info__.parent_workflow_id }}"
+      event_type: processing_complete
       data:
-        event_name: processing_complete
         result: "{{ processing_result }}"
 ```
 
@@ -1034,8 +1050,9 @@ Activities are external functions or services executed by the workflow. They are
         limit: 10
         offset: 0
     output_name: api_response
-    timeout_sec: 30
-    max_retry_attempts: 3
+    retry_policy:
+      timeout_sec: 30
+      max_attempts: 3
 ```
 
 **POST request with JSON body**
@@ -1076,15 +1093,29 @@ Activities are external functions or services executed by the workflow. They are
 
 #### Retry and Timeout
 
+Timeout and retry behavior is configured through a nested `retry_policy` block. It is
+honored only by the Temporal runtime (the in-memory runtime ignores it).
+
 ```yaml
 - activity:
     type: builtin.http_request
     input_data:
       url: https://unreliable-api.com/data
-    timeout_sec: 10                  # Timeout per attempt
-    max_retry_attempts: 5            # Total attempts (initial + retries)
+    retry_policy:
+      timeout_sec: 10                     # Per-attempt (start-to-close) timeout
+      schedule_to_close_timeout_sec: 60   # Overall timeout across all attempts
+      heartbeat_timeout_sec: 5            # Heartbeat timeout (Temporal only)
+      max_attempts: 5                     # Total attempts (initial + retries); 0 = unlimited
+      initial_interval_sec: 1.0           # First retry backoff interval
+      backoff_coefficient: 2.0            # Exponential backoff multiplier
+      maximum_interval_sec: 30.0          # Cap on backoff interval
+      non_retryable_error_types:          # Error types that skip retries
+        - ValueError
     output_name: result
 ```
+
+- `timeout_sec` is the per-attempt execution timeout.
+- `max_attempts` is the total number of attempts (initial + retries), not just the retry count.
 
 #### Caching
 
@@ -1132,7 +1163,8 @@ Custom activities are registered with the engine via activity providers.
       attachments:
         - "{{ invoice_pdf }}"
     output_name: email_result
-    timeout_sec: 30
+    retry_policy:
+      timeout_sec: 30
 ```
 
 ---
@@ -1183,17 +1215,17 @@ state_machine:
     - from_state: pending
       to_state: processing
       trigger:
-        event_name: start_processing
+        event_type: start_processing
 
     - from_state: processing
       to_state: completed
       trigger:
-        event_name: processing_complete
+        event_type: processing_complete
 
     - from_state: processing
       to_state: failed
       trigger:
-        event_name: processing_failed
+        event_type: processing_failed
 ```
 
 ### State Configuration
@@ -1242,7 +1274,7 @@ transitions:
   - from_state: pending
     to_state: approved
     trigger:
-      event_name: approve
+      event_type: approve
 ```
 
 #### Transition with Condition
@@ -1252,11 +1284,11 @@ transitions:
   - from_state: pending
     to_state: processing
     trigger:
-      event_name: start_processing
+      event_type: start_processing
       condition:
-        - and:
-            - "{{ event.data.get('price') > 0 }}"
-            - "{{ event.data.get('inventory_available') == true }}"
+        and:
+          - "{{ event.data.get('price') > 0 }}"
+          - "{{ event.data.get('inventory_available') == true }}"
 ```
 
 #### Multiple Transitions from Same State
@@ -1266,36 +1298,27 @@ transitions:
   - from_state: processing
     to_state: completed
     trigger:
-      event_name: success
+      event_type: success
 
   - from_state: processing
     to_state: failed
     trigger:
-      event_name: error
+      event_type: error
 
   - from_state: processing
     to_state: pending
     trigger:
-      event_name: retry
+      event_type: retry
 ```
 
 ### Global Triggers
 
-Transitions that apply from any state.
+A transition that omits `from_state` applies from any state.
 
 ```yaml
 state_machine:
   name: order-fsm
   initial_state: pending
-
-  global_triggers:
-    - to_state: cancelled             # From any state
-      trigger:
-        event_name: cancel
-
-    - to_state: failed
-      trigger:
-        event_name: critical_error
 
   states:
     - name: pending
@@ -1304,6 +1327,17 @@ state_machine:
       is_terminal: true
     - name: failed
       is_terminal: true
+
+  transitions:
+    # A transition with no from_state is a wildcard: it fires from any state.
+    # State-specific transitions are matched first; wildcards are the fallback.
+    - to_state: cancelled
+      trigger:
+        event_type: cancel
+
+    - to_state: failed
+      trigger:
+        event_type: critical_error
 ```
 
 ### Event Source Configuration
@@ -1323,7 +1357,7 @@ state_machine:
     - from_state: pending
       to_state: processing
       trigger:
-        event_name: start              # Listen for "start" event on order_events topic
+        event_type: start              # Listen for "start" event on order_events topic
 ```
 
 ### Complete State Machine Example
@@ -1362,8 +1396,8 @@ body:
                     - emit_event:
                         input_data:
                           topic: order_events
+                          event_type: "{{ 'validated' if validation_result.valid else 'validation_failed' }}"
                           data:
-                            event_name: "{{ 'validated' if validation_result.valid else 'validation_failed' }}"
                             order_id: "{{ order_id }}"
 
             - name: processing
@@ -1382,8 +1416,7 @@ body:
                     - emit_event:
                         input_data:
                           topic: order_events
-                          data:
-                            event_name: "{{ 'payment_complete' if payment_result.success else 'payment_failed' }}"
+                          event_type: "{{ 'payment_complete' if payment_result.success else 'payment_failed' }}"
                             order_id: "{{ order_id }}"
 
             - name: fulfilling
@@ -1402,8 +1435,8 @@ body:
                     - emit_event:
                         input_data:
                           topic: order_events
+                          event_type: fulfilled
                           data:
-                            event_name: fulfilled
                             order_id: "{{ order_id }}"
                             tracking: "{{ shipment_result.tracking_number }}"
 
@@ -1427,32 +1460,32 @@ body:
             - from_state: validating
               to_state: processing
               trigger:
-                event_name: validated
+                event_type: validated
 
             - from_state: validating
               to_state: failed
               trigger:
-                event_name: validation_failed
+                event_type: validation_failed
 
             - from_state: processing
               to_state: fulfilling
               trigger:
-                event_name: payment_complete
+                event_type: payment_complete
 
             - from_state: processing
               to_state: failed
               trigger:
-                event_name: payment_failed
+                event_type: payment_failed
 
             - from_state: fulfilling
               to_state: completed
               trigger:
-                event_name: fulfilled
+                event_type: fulfilled
 
-          global_triggers:
+            # No from_state -> fires from any state
             - to_state: failed
               trigger:
-                event_name: cancel
+                event_type: cancel
 ```
 
 ---
@@ -1482,8 +1515,8 @@ Send events to the event bus.
     input_data:
       topic: child_events
       target_workflow_id: "{{ parent_workflow_id }}"
+      event_type: child_complete
       data:
-        event_name: child_complete
         result: "{{ processing_result }}"
 ```
 
@@ -1586,8 +1619,8 @@ body:
               event:
                 topic: child_events
                 match_expression: >
-                  {{ event.data.get('event_name') == 'complete' and
-                     event.source_workflow_id == iter_item }}
+                  {{ event['event_type'] == 'complete' and
+                     event['source'] == iter_item }}
               timeout_sec: 300
               output_name: child_result
 ```
@@ -1616,8 +1649,8 @@ body:
           input_data:
             topic: child_events
             target_workflow_id: "{{ parent_workflow_id }}"
+            event_type: complete
             data:
-              event_name: complete
               result: "{{ result }}"
 ```
 
@@ -1734,8 +1767,8 @@ Customize child workflow execution.
     execute_options:
       workflow_id: "data-proc-{{ batch_id }}"  # Custom workflow ID
       task_queue: high-priority                # Custom task queue
-      execution_timeout_sec: 3600              # Overall timeout
-      run_timeout_sec: 1800                    # Single run timeout
+      retry_policy:
+        timeout_sec: 1800                      # Workflow run timeout
     input_data:
       batch_id: "{{ batch_id }}"
       data: "{{ batch_data }}"
@@ -1873,8 +1906,9 @@ body:
             amount: "{{ order_total }}"
             payment_info: "{{ payment_info }}"
             customer_id: "{{ customer_id }}"
-          timeout_sec: 30
-          max_retry_attempts: 3
+          retry_policy:
+            timeout_sec: 30
+            max_attempts: 3
           output_name: payment_result
 
       - abort:
@@ -1997,7 +2031,8 @@ body:
                               input_data:
                                 record: "{{ iter_item }}"
                               output_name: transformed
-                              max_retry_attempts: 2
+                              retry_policy:
+                                max_attempts: 2
 
                           - activity:
                               type: data.validate
@@ -2119,28 +2154,25 @@ body:
             - from_state: waiting
               to_state: processing
               trigger:
-                event_name: agent_started
-                condition:
-                  - "{{ event.data.get('agent_id') in [a['agent_id'] for a in agent_configs] }}"
+                event_type: agent_started
+                condition: "{{ event.data.get('agent_id') in [a['agent_id'] for a in agent_configs] }}"
 
             - from_state: processing
               to_state: processing
               trigger:
-                event_name: agent_progress
-                condition:
-                  - "{{ event.data.get('agent_id') != '' }}"
+                event_type: agent_progress
+                condition: "{{ event.data.get('agent_id') != '' }}"
 
             - from_state: processing
               to_state: completed
               trigger:
-                event_name: agent_complete
-                condition:
-                  - "{{ len(agent_results) == len(agent_configs) }}"
+                event_type: agent_complete
+                condition: "{{ len(agent_results) == len(agent_configs) }}"
 
-          global_triggers:
+            # No from_state -> fires from any state
             - to_state: failed
               trigger:
-                event_name: agent_failed
+                event_type: agent_failed
 
       # Aggregate results
       - transform:
@@ -2173,8 +2205,8 @@ body:
           input_data:
             topic: agent_events
             target_workflow_id: "{{ orchestrator_id }}"
+            event_type: agent_started
             data:
-              event_name: agent_started
               agent_id: "{{ agent_id }}"
 
       # Do work
@@ -2191,8 +2223,8 @@ body:
           input_data:
             topic: agent_events
             target_workflow_id: "{{ orchestrator_id }}"
+            event_type: agent_progress
             data:
-              event_name: agent_progress
               agent_id: "{{ agent_id }}"
               progress: 50
 
@@ -2209,8 +2241,8 @@ body:
           input_data:
             topic: agent_events
             target_workflow_id: "{{ orchestrator_id }}"
+            event_type: agent_complete
             data:
-              event_name: agent_complete
               agent_id: "{{ agent_id }}"
               result: "{{ agent_result }}"
 ```
@@ -2243,8 +2275,9 @@ body:
     type: external.api
     input_data:
       url: "{{ endpoint }}"
-    timeout_sec: 10
-    max_retry_attempts: 3
+    retry_policy:
+      timeout_sec: 10
+      max_attempts: 3
     output_name: result
 ```
 

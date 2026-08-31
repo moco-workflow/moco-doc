@@ -81,8 +81,7 @@ class MyActivityProvider(IActivityProvider):
 | `description` | string | Human-readable description |
 | `version` | string | Semver string (default: `"1.0.0"`) |
 | `execute_locally` | bool | Always run locally, bypassing Temporal dispatch |
-| `default_start_to_close_timeout_sec` | int | Default timeout in seconds (default: 60) |
-| `max_retry_attempts` | int | Default retry count (default: 3) |
+| `default_retry_policy` | RetryPolicy | Default timeout/retry configuration (default: `RetryPolicy(timeout_sec=60, max_attempts=3)`) |
 
 ### ActivityRequest Fields
 
@@ -155,7 +154,8 @@ body:
             amount: "{{ amount }}"
             region: "{{ region }}"
           output_name: tax_info
-          timeout_sec: 5
+          retry_policy:
+            timeout_sec: 5
 ```
 
 Use `config_data` for values that are the same every invocation (connection strings, API base URLs, fixed options) and `input_data` for values that vary per execution:

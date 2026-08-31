@@ -208,8 +208,9 @@ The `builtin.http_request` activity handles most API integrations:
         order_id: "{{ order_id }}"
         items: "{{ cart_items }}"
     output_name: create_response
-    timeout_sec: 30
-    max_retry_attempts: 3
+    retry_policy:
+      timeout_sec: 30
+      max_attempts: 3
 ```
 
 Use `config_data` for values that are the same every time (headers, base URL) and `input_data` for values that change per execution.
@@ -269,8 +270,9 @@ Activities retry automatically on failure. Override defaults per activity:
     input_data:
       url: https://flaky-api.example.com/data
     output_name: result
-    timeout_sec: 10
-    max_retry_attempts: 5
+    retry_policy:
+      timeout_sec: 10
+      max_attempts: 5
 ```
 
 ### Cache Expensive Calls
@@ -320,7 +322,8 @@ body:
             method: GET
             url: https://api.example.com/orders/{{ order_id }}
           output_name: order
-          timeout_sec: 10
+          retry_policy:
+            timeout_sec: 10
 
       # Process payment and notify in parallel
       - parallel:
@@ -336,7 +339,8 @@ body:
                     amount: "{{ order.total }}"
                     customer_id: "{{ order.customer_id }}"
                 output_name: payment_result
-                timeout_sec: 30
+                retry_policy:
+                  timeout_sec: 30
 
             - activity:
                 name: send-confirmation
@@ -347,7 +351,8 @@ body:
                   body:
                     to: "{{ customer_email }}"
                     subject: "Order {{ order_id }} received"
-                timeout_sec: 10
+                retry_policy:
+                  timeout_sec: 10
 
       - transform:
           output_data:

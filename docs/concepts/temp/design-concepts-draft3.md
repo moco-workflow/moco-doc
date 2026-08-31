@@ -1,4 +1,18 @@
+temporal:
 It captures states at a different dimension and offload the complex state mangement from application layer to platform layer, and greatly simplified application logic with durability guarantee.
+
+
+## design goal
+* moco workflow platform aims for buiness workflows orchestrating API calls, with advanced data transformation capability
+
+* fully decouple workflow logic from underneath runtime platform
+workflows and runtime platform are developed, managed, and deployed independenty
+workflows focus on business logic, it's
+- focus on control flows and data contracts
+- concise, implementation details (security,reliability,scalability,concurrency, etc) are abstraced away from workflow logic
+- platform agnostic
+- workflow lifecycle is fully managed by workflow owner
+- self deployable
 
 
 ## computational model
@@ -32,14 +46,23 @@ It captures states at a different dimension and offload the complex state mangem
 
 - state machine
   - can blend with workflow imperative statements seamlessly
+  - event-driven application
+    - AI agents
+    - Request handler
+    - monitoring external data sources
+    - complex workflows
+    - human in the loop workflows
 
 - rules engine
   - can blend with workflow imperative statements seamlessly
+
+- support durable event subscription and publishing (through durable long-running activities)
 
 
 ## execution model
 - in-process execution
 - distributed execution
+- run-as-activity
 
 ## workflow deployment model
 - workflow is deployed like an app rather than a service
@@ -58,7 +81,7 @@ The virtual workflow runtime and run in-process or run on top of Temporalio for 
 - concise
   - focus on business logic
   - abstract away error handling, timeout, retry logic
-- decoupled with implementation details
+- decoupled from implementation details
 - platform agnostic
 - can compose hierachical workflows
 

@@ -79,8 +79,9 @@ Executes a registered activity (HTTP call, database query, custom function, etc.
       body:
         order_id: "{{ order_id }}"
     output_name: api_response
-    timeout_sec: 30
-    max_retry_attempts: 3
+    retry_policy:
+      timeout_sec: 30
+      max_attempts: 3
 ```
 
 | Parameter | Description |
@@ -90,8 +91,7 @@ Executes a registered activity (HTTP call, database query, custom function, etc.
 | `config_data` | Static configuration, evaluated once at workflow start |
 | `input_data` | Dynamic input, evaluated each time the activity runs |
 | `output_name` | Variable to store the activity result |
-| `timeout_sec` | Execution timeout in seconds |
-| `max_retry_attempts` | Number of retries on failure |
+| `retry_policy` | Nested timeout/retry config (Temporal only): `timeout_sec` (per-attempt execution timeout), `schedule_to_close_timeout_sec`, `heartbeat_timeout_sec`, `heartbeat_interval_sec` (heartbeat cadence; heartbeating is enabled only when both `heartbeat_timeout_sec` and `heartbeat_interval_sec` are set), `max_attempts` (total attempts = initial + retries), `initial_interval_sec`, `backoff_coefficient`, `maximum_interval_sec`, `non_retryable_error_types` |
 | `execute_locally` | Force local execution, bypassing Temporal |
 | `enable_cache` | Enable result caching |
 | `cache_policy` | Cache configuration (TTL, key) |
@@ -193,9 +193,14 @@ Waits for an event matching filter criteria, or until a timeout.
 | Parameter | Description |
 |-----------|-------------|
 | `event.topic` | Event topic to subscribe to |
+| `event.event_type` | Only events with this exact type match |
 | `event.match_expression` | Python expression to filter incoming events (`event` variable is the event object) |
 | `timeout_sec` | Maximum wait time in seconds (required) |
 | `output_name` | Variable to store the received event |
+
+To collect the result of an activity started with `async_mode: true`, pass the token that
+activity returned as `event.event_type` — see
+[Async activity results](./events.md#async-activity-results).
 
 ---
 
@@ -241,6 +246,93 @@ This is a no-op in the in-memory runtime. In Temporal, it triggers a continue-as
 | `name` | string | null | Optional identifier for logging |
 | `serialize_data_context` | boolean | true | Whether to include data context variables in the serialized state |
 | `condition` | expression | null | Skip this statement if the expression is falsy |
+| `enforce` | boolean | false | Restart regardless of runtime suggestion. Testing only |
+
+After the restart the workflow body runs from the beginning, so the spec must skip work it has
+already done. If the body is a single `state_machine`, prefer a state
+[`checkpoint_policy`](#checkpoint_policy) instead — the runtime resumes in the right state by
+itself.
+
+---
+
+### checkpoint_policy
+
+Declared on a **state**, not as a statement. The runtime checkpoints while the machine sits in
+that state and resumes it there afterwards, so the spec does not have to describe recovery.
+
+```yaml
+states:
+  - name: idle
+    checkpoint_policy:
+      timeout_sec: 300
+      event_count: 100
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `timeout_sec` | number \| expression | null | Checkpoint after this long in the state |
+| `event_count` | integer | null | Checkpoint after this many events handled in the state |
+| `serialize_data_context` | boolean | true | Whether to include data context variables |
+| `auto_resume` | boolean | true | Resume in this state, skipping `on_enter`. False restarts the machine at `initial_state` |
+| `enforce` | boolean | false | Checkpoint regardless of runtime suggestion. Testing only |
+
+At least one of `timeout_sec` / `event_count` is required; if both are set, whichever trips
+first wins.
+
+An event counts toward `event_count` when a transition matched it for the current state and the
+state is unchanged afterwards — internal transitions, self-transitions, and events whose
+transition condition was false. Unmatched events do not count, and moving to a different state
+resets the count.
+
+Requires the wfspec body to be a single `state_machine` statement; a policy anywhere else is
+rejected at parse time. On resume the state's `on_enter` is skipped (it already ran before the
+checkpoint) and its timers are re-armed from their full duration.
+
+#### Opting out of auto-resume
+
+`auto_resume: false` keeps the checkpoint but skips the jump: the machine restarts at
+`initial_state` with `on_enter` running normally.
+
+Use it when an earlier state has a side effect the new execution needs again — typically an
+`init` state that starts a long-running `async_mode` activity feeding the machine's
+`event_source_topic`. Those activity handles do not survive continue-as-new, so resuming
+straight into the state that consumed their events leaves the machine with no producer.
+
+The record is still written, so the state the checkpoint fired in stays readable as
+`__sys_info__.state_machine.checkpointed_from_state`. An `init` state can use it to re-run its
+side effect and then route straight back, skipping one-time setup:
+
+```yaml
+states:
+  - name: init
+    on_enter:
+      activity:                     # the subscriber, restarted every execution
+        name: subscriber
+        type: rabbit.receive
+        async_mode: true
+        async_event_topic: monitor_events
+        output_name: subscriber_token
+        input_data: { queue: prices }
+
+  - name: monitoring
+    checkpoint_policy:
+      event_count: 100
+      auto_resume: false
+
+transitions:
+  # Listed first: the first satisfied automatic transition wins.
+  - from_state: init
+    to_state: monitoring
+    trigger:
+      condition: '{{ __sys_info__.get("state_machine", {}).get("checkpointed_from_state") == "monitoring" }}'
+
+  - from_state: init
+    to_state: warmup
+    trigger: null
+```
+
+`resumed_from_state` is set only when the machine actually jumped, so under `auto_resume: false`
+it is null while `checkpointed_from_state` names the state. Both are null on a first run.
 
 ---
 
@@ -346,8 +438,11 @@ Event-driven finite state machine. See [State Machines Reference](./state-machin
       - from_state: pending
         to_state: processing
         trigger:
-          event_name: start
+          event_type: start
 ```
+
+`trigger.event_type` accepts an expression, resolved against the workflow context on every
+incoming event — see [expression triggers](./state-machines.md#expression-triggers).
 
 ---
 
