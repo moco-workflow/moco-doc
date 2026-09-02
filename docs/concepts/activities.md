@@ -143,8 +143,11 @@ Access secrets securely. Plaintext secrets never travel between activities.
 Most activities that need a secret take a **secret key** instead of the secret itself — for
 example `openai.chat.completions.apikey_secret_key`, `email.send.password_secret_key`,
 `sql.query.connection_string_secret_key` or, nested one level down,
-`llama_index.query.vectordb_info.connection_string_secret_key` and
-`llama_index.query.embed_model_info.apikey_secret_key`. The activity looks the secret up and
+`llama_index.query.vectordb_info.connection_string_secret_key`,
+`llama_index.query.embed_model_info.apikey_secret_key`,
+`llama_index.index_github.auth.token_secret_key` and
+`gdrive.*.auth.credentials_secret_key` (which `llama_index.index_gdrive` reuses
+verbatim). The activity looks the secret up and
 decrypts it internally, so nothing sensitive touches workflow context at all. A bare `NAME`
 resolves a user-scoped secret; `global/NAME` resolves a global one.
 
@@ -183,13 +186,28 @@ stored blob directly.
 
 ### Retrieval-Augmented Generation (RAG)
 
-Two activities build and query a vector index over your own documents, so an LLM can answer
+These activities build and query a vector index over your own documents, so an LLM can answer
 from them instead of from its training data. Documents are chunked and embedded into a
-[pgvector](https://github.com/pgvector/pgvector) table by `llama_index.index_docs`, and
-`llama_index.query` finds the chunks closest to a question.
+[pgvector](https://github.com/pgvector/pgvector) table by one of the `llama_index.index_*`
+activities, and `llama_index.query` finds the chunks closest to a question.
 
-Both take the same two nested blocks, so build them once in `context` and reuse them — the
-embedding model **must** be identical on both sides, or the similarity scores are meaningless:
+There is one indexing activity per document source:
+
+| Activity | Indexes |
+| --- | --- |
+| `llama_index.index_web` | Pages or documents at a list of URLs |
+| `llama_index.index_site` | Every page reachable from one seed — a sitemap, a feed, or a crawl |
+| `llama_index.index_github` | The files of a GitHub or GitHub Enterprise repository |
+| `llama_index.index_gdrive` | A Google Drive folder, file list or query |
+| `llama_index.index_files` | Files already on the worker's disk |
+
+They all share the same chunking, embedding and metadata handling, so a single table can hold
+documents from several sources: every chunk carries `source_url`, `file_name` and
+`source_type`, whichever activity wrote it.
+
+Every one of them takes the same two nested blocks, so build them once in `context` and reuse
+them — the embedding model **must** be identical on both sides, or the similarity scores are
+meaningless:
 
 ```yaml
 context:
@@ -202,16 +220,18 @@ context:
     embed_dim: 1536                         # must match the model and the existing table
 ```
 
-Indexing downloads each URL to a local directory and parses it by file type (`.md`, `.html`,
-`.pdf`, `.txt`, `.docx`, ...). A URL that fails to download is reported in `failed_urls`
+#### Indexing from the web
+
+`index_web` fetches each URL and parses it. A URL that fails is reported in `failed_sources`
 rather than failing the run:
 
 ```yaml
 - activity:
-    type: llama_index.index_docs
+    type: llama_index.index_web
     name: index-docs
     input_data:
-      document_urls: "{{ doc_urls }}"
+      urls: "{{ doc_urls }}"
+      loader: download                # see the table below
       vectordb_info: "{{ vectordb_info }}"
       embed_model_info: "{{ embed_model_info }}"
       chunk_size: 1024
@@ -219,8 +239,103 @@ rather than failing the run:
       overwrite: true                 # replace the table's contents; false appends
       metadata:                       # attached to every chunk, filterable at query time
         collection: "product-docs"
-    output_name: index_result         # -> indexed_urls, failed_urls, document_count, node_count
+    output_name: index_result         # -> indexed_sources, failed_sources, document_count,
+                                      #    node_count, table_name, source_type
 ```
+
+The `loader` decides how a URL becomes text. Only `download` handles non-HTML formats, and the
+`simple` and `async` loaders fetch pages themselves, so they do not see moco's proxy settings:
+
+| `loader` | Extracts | Handles PDF/DOCX | Honours `MOCO_HTTP_PROXY` |
+| --- | --- | --- | --- |
+| `download` *(default)* | The file, parsed by extension | Yes | Yes |
+| `trafilatura` | The main article, without navigation boilerplate | No | Yes |
+| `readability` | The main article, via a headless browser (sees client-rendered pages) | No | Yes |
+| `beautiful_soup` | All page text | No | Yes |
+| `simple` | The whole HTML page as text | No | No |
+| `async` | The whole HTML page as text, fetched concurrently | No | No |
+
+Keep `download` unless the pages are HTML *and* the boilerplate is hurting retrieval quality —
+then reach for `trafilatura`, which indexes the article and leaves the navigation behind.
+
+#### Indexing a whole site
+
+`index_site` takes one seed URL and expands it. `sitemap` reads `sitemap.xml`; `rss` reads a
+feed (indexing each entry's **summary**, not the linked article); `whole_site` walks links with
+a real browser and needs Chrome plus `MOCO_CHROME_DRIVER_PATH` on the worker.
+
+```yaml
+- activity:
+    type: llama_index.index_site
+    input_data:
+      url: "https://docs.example.com/sitemap.xml"
+      crawler: sitemap
+      limit: 200                      # bound the crawl
+      url_filter: "/guides/"          # only sitemap entries containing this
+      vectordb_info: "{{ vectordb_info }}"
+      embed_model_info: "{{ embed_model_info }}"
+```
+
+#### Indexing a GitHub repository
+
+Reads one branch or one `commit_sha`, narrowed by include/exclude filters. Set `auth.base_url`
+for GitHub Enterprise. `auth.token_secret_key` is optional — without it the reader is anonymous,
+which reaches public repositories at a much lower rate limit.
+
+```yaml
+- activity:
+    type: llama_index.index_github
+    input_data:
+      auth:
+        token_secret_key: "GH_TOKEN"
+        base_url: "https://api.github.com"    # or https://<ghe-host>/api/v3
+      owner: "temporalio"
+      repo: "documentation"
+      branch: "main"
+      include_directories: ["docs"]           # exclude_directories is the other way round
+      include_extensions: [".md", ".mdx"]
+      vectordb_info: "{{ vectordb_info }}"
+      embed_model_info: "{{ embed_model_info }}"
+```
+
+#### Indexing Google Drive
+
+Takes the same `auth` block as the `gdrive.*` activities, so define it once and share it.
+
+```yaml
+- activity:
+    type: llama_index.index_gdrive
+    input_data:
+      auth: "{{ gdrive_auth }}"       # credentials_secret_key -> service-account key JSON
+      folder_id: "{{ folder_id }}"    # or file_ids: [...], or query_string: "name contains 'Q1'"
+      vectordb_info: "{{ vectordb_info }}"
+      embed_model_info: "{{ embed_model_info }}"
+```
+
+:::caution
+`index_gdrive` **rejects** `auth.impersonate_user` and `auth.scopes` rather than silently
+ignoring them: the underlying reader always acts as the service account itself. Either share
+the folder with the service account, or — if you need domain-wide delegation — use
+`gdrive.download` (which does support it) with `output_format: file`, then
+`llama_index.index_files` over the downloaded directory.
+:::
+
+#### Indexing local files
+
+`index_files` parses a directory already on the worker. `path` is resolved under
+`MOCO_RAG_FILE_DIR` and a path escaping that root is rejected.
+
+```yaml
+- activity:
+    type: llama_index.index_files
+    input_data:
+      path: "reports/q1"
+      required_extensions: [".pdf", ".md"]
+      vectordb_info: "{{ vectordb_info }}"
+      embed_model_info: "{{ embed_model_info }}"
+```
+
+#### Querying
 
 Querying has two modes. `retrieve` returns the matching chunks and nothing else, leaving the
 prompt to you — useful when you want to force citations or a specific refusal:
@@ -260,13 +375,182 @@ embedding one, since the two usually share a gateway):
 ```
 
 :::note
-`index_docs` writes rows and is **not** retried by default (`max_attempts: 1`) — a retry would
-duplicate chunks. Use `overwrite: true` to make re-runs idempotent. The database needs the
-`vector` extension enabled; `moco-db` does this for you.
+Every `index_*` activity writes rows and is **not** retried by default (`max_attempts: 1`) — a
+retry would duplicate chunks. Use `overwrite: true` to make re-runs idempotent. The database
+needs the `vector` extension enabled; `moco-db` does this for you.
 :::
 
-A complete runnable example, contrasting both modes over the same question, lives in
+:::caution
+`overwrite: true` empties the **whole table**, not just the documents that activity is about to
+write. When you feed one `table_name` from several sources — say web pages plus a repository —
+set it on the first activity only, or the second will discard what the first just indexed.
+:::
+
+:::info Deprecated
+`llama_index.index_docs` still works but is deprecated in favour of `llama_index.index_web`,
+whose default `loader: download` reproduces its behaviour exactly. To migrate, rename the
+activity, rename `document_urls` to `urls`, and read `indexed_sources` / `failed_sources`
+instead of `indexed_urls` / `failed_urls`.
+:::
+
+A complete runnable example, contrasting both query modes over the same question, lives in
 `moco-examples/rag-demo/`.
+
+### Google Drive
+
+Six activities read and write files in Google Drive: `gdrive.download`, `gdrive.upload`,
+`gdrive.list`, `gdrive.get_metadata`, `gdrive.create_folder` and `gdrive.delete`. Together they
+cover picking up a file someone dropped in a shared folder, and publishing a generated report
+back to one.
+
+All six authenticate as a **service account**, whose key JSON lives in the secret store. Define
+the `auth` block once in `context` and reference it everywhere:
+
+```yaml
+context:
+  gdrive_auth:
+    credentials_secret_key: "GDRIVE_SERVICE_ACCOUNT"  # the whole key JSON, in the secret store
+    # impersonate_user: "ops@example.com"   # optional: act as a user via domain-wide delegation
+    # scopes: ["https://www.googleapis.com/auth/drive.readonly"]   # optional: narrow the access
+```
+
+:::caution
+A service account has its own empty Drive. It can only see files and folders **explicitly
+shared with its email address** — so share the target folder with the service account before
+the first run, or set `impersonate_user` and configure domain-wide delegation.
+:::
+
+#### Content moves in one of two formats
+
+Every download and upload picks a `format`:
+
+| Format | Where the bytes live | Use it when |
+| --- | --- | --- |
+| `base64` (default) | Inline in workflow context, as a base64 string | The file is small and a later step needs its content |
+| `file` | On the worker's filesystem, under `MOCO_GDRIVE_FILE_DIR` | The file is large, or a later `shell.run` needs it on disk |
+
+`base64` copies the payload into workflow history, so keep it to small files. `file` paths are
+always relative to `MOCO_GDRIVE_FILE_DIR` (default `/tmp/moco/gdrive`); paths that escape that
+directory are rejected. Either way a single transfer is capped at `MOCO_GDRIVE_MAX_FILE_SIZE_MB`
+(default 256).
+
+#### Finding and downloading a file
+
+`gdrive.list` resolves a name to a `file_id`. Pass `parent_folder_id` and/or `name_contains`, or
+take over completely with a raw [Drive query string](https://developers.google.com/drive/api/guides/search-files)
+in `query`:
+
+```yaml
+- activity:
+    type: gdrive.list
+    name: find-latest-report
+    input_data:
+      auth: "{{ gdrive_auth }}"
+      parent_folder_id: "{{ inbox_folder_id }}"
+      name_contains: "monthly-report"
+      order_by: "modifiedTime desc"
+      page_size: 10
+    output_name: found      # -> files[{file_id, name, mime_type, size_bytes, ...}], file_count,
+                            #    next_page_token
+```
+
+```yaml
+- activity:
+    type: gdrive.download
+    name: fetch-report
+    input_data:
+      file_id: "{{ found.files[0].file_id }}"
+      auth: "{{ gdrive_auth }}"
+      output_format: base64           # or 'file' plus a file_path
+    output_name: report   # -> file_id, name, mime_type, size_bytes, format, data, exported
+```
+
+`output_data.data` holds the base64 content, or — with `output_format: file` — the absolute path
+the content was written to. `format` echoes which, so a downstream step can branch on it.
+
+**Google-native documents** (Docs, Sheets, Slides, Drawings) have no stored bytes and cannot be
+downloaded directly; they are exported automatically to `.docx`, `.xlsx`, `.pptx` and `.pdf`
+respectively, and `exported: true` says so. Set `export_mime_type: application/pdf` to get a PDF
+of any of them instead.
+
+#### Uploading
+
+Supply the content inline as base64, or read it from the worker's disk:
+
+```yaml
+- activity:
+    type: gdrive.upload
+    name: publish-summary
+    input_data:
+      name: "summary-{{ run_date }}.csv"
+      auth: "{{ gdrive_auth }}"
+      data: "{{ base64.b64encode(summary_csv.encode()).decode() }}"
+      parent_folder_id: "{{ output_folder_id }}"
+      mime_type: "text/csv"       # optional; guessed from the file name when omitted
+    output_name: published        # -> file_id, name, mime_type, size_bytes, web_view_link, parents
+```
+
+```yaml
+- activity:
+    type: gdrive.upload
+    name: publish-large-export
+    input_data:
+      name: "export.parquet"
+      auth: "{{ gdrive_auth }}"
+      source_format: file
+      file_path: "exports/export.parquet"   # relative to MOCO_GDRIVE_FILE_DIR
+      parent_folder_id: "{{ output_folder_id }}"
+    output_name: published
+```
+
+Set `mime_type` to a Google-native type (e.g. `application/vnd.google-apps.spreadsheet`) to have
+Drive convert the upload into a native document as it lands. Conversion needs to know the format
+to convert *from*, which is taken from the file name — add `source_mime_type: text/csv` when the
+name has no useful extension:
+
+```yaml
+- activity:
+    type: gdrive.upload
+    input_data:
+      name: "Q3 numbers"          # no extension, so the source format can't be guessed
+      auth: "{{ gdrive_auth }}"
+      data: "{{ base64.b64encode(csv_text.encode()).decode() }}"
+      mime_type: "application/vnd.google-apps.spreadsheet"   # target: a real Google Sheet
+      source_mime_type: "text/csv"                           # what the bytes actually are
+```
+
+#### Folders, metadata and deletion
+
+```yaml
+- activity:
+    type: gdrive.create_folder
+    input_data:
+      name: "{{ run_date }}"
+      auth: "{{ gdrive_auth }}"
+      parent_folder_id: "{{ archive_folder_id }}"
+      skip_if_exists: true      # reuse a folder of this name instead of creating a second one
+    output_name: run_folder     # -> folder{file_id, name, ...}, created
+
+- activity:
+    type: gdrive.delete
+    input_data:
+      file_id: "{{ stale_file_id }}"
+      auth: "{{ gdrive_auth }}"
+      permanent: false          # move to trash (default); true deletes outright
+    output_name: deleted        # -> file_id, permanent
+```
+
+:::note
+The three write activities — `upload`, `create_folder` and `delete` — are **not retried** by
+default (`max_attempts: 1`). Drive allows several files to share a name in one folder, so a
+retried create leaves a duplicate behind. The idempotent paths are `upload` with an explicit
+`file_id` (which replaces that file's contents in place) and `create_folder` with
+`skip_if_exists: true`; with either of those set it is safe to raise `max_attempts` via the
+activity's `retry_policy`.
+:::
+
+A complete runnable example — create a folder, upload a report, list it, download it back and
+clean up — lives in `moco-examples/gdrive-demo/`.
 
 ## Config vs Input Data
 
