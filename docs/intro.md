@@ -4,9 +4,18 @@ sidebar_position: 1
 
 # Moco Overview
 
-**Moco is a cloud-based business workflow platform that lets you build, compose, and release workflows freely.**
+Business workflows are open ended, change often, and belong to the people who run the process — not
+the people who run the platform. How to build a generic business workflow platform that can release
+a workflow change without an engineering cycle, and let existing logic be shared and reused to
+compose new workflows, is a big challenge.
 
-Moco gives you two things: an **abstract workflow spec** and a **virtual execution runtime**.
+**Moco is a cloud-based business workflow platform that lets you build, compose, and release
+workflows freely.**
+
+It gives you three things: an **abstract workflow spec** that expresses imperative, event-driven,
+and rule-based logic in one language; a **virtual execution runtime** that runs it durably while
+hiding the distributed-state machinery; and an **agile way to deploy workflows** — released as data,
+on demand, independently of the runtime platform.
 
 ## What is Moco
 

@@ -115,7 +115,15 @@ Useful options while developing:
 moco run src/sequence-demo.yaml --input '{"name": "Moco"}'   # pass input data as JSON
 moco run src/sequence-demo.yaml --debug                      # verbose logs and debug traces
 moco run src/sequence-demo.yaml --in-memory                  # run in-process, no Temporal
+moco run src/sequence-demo.yaml --output result.json         # also save the result to a file
 ```
+
+`--output` (short form `-o`) is worth reaching for whenever the result is large or you want to
+feed it into another tool. Progress and log lines share stdout with the result, so redirecting
+with `>` captures both — `--output` writes the result payload on its own. The format follows the
+file extension: `.json` writes pretty-printed JSON, `.yaml`/`.yml` writes YAML, and any other
+extension writes a string result verbatim (useful for a workflow that returns markdown or CSV),
+falling back to JSON for non-strings. The result is still printed to the terminal as usual.
 
 Long-running workflows can be started asynchronously and managed by workflow ID:
 
