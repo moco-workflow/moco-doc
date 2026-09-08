@@ -92,11 +92,15 @@ Executes a registered activity (HTTP call, database query, custom function, etc.
 | `input_data` | Dynamic input, evaluated each time the activity runs |
 | `output_name` | Variable to store the activity result |
 | `retry_policy` | Nested timeout/retry config (Temporal only): `timeout_sec` (per-attempt execution timeout), `schedule_to_close_timeout_sec`, `heartbeat_timeout_sec`, `heartbeat_interval_sec` (heartbeat cadence; heartbeating is enabled only when both `heartbeat_timeout_sec` and `heartbeat_interval_sec` are set), `max_attempts` (total attempts = initial + retries), `initial_interval_sec`, `backoff_coefficient`, `maximum_interval_sec`, `non_retryable_error_types` |
-| `execute_locally` | Force local execution, bypassing Temporal |
+| `execute_locally` | Force local execution, bypassing Temporal. Overrides the activity's own default; omit it to keep that default |
 | `enable_cache` | Enable result caching |
 | `cache_policy` | Cache configuration (TTL, key) |
 
 Built-in activities: `builtin.delay`, `builtin.now`, `builtin.execute_workflow`.
+
+Some activities already default to local execution, so `execute_locally` is rarely needed. Setting
+it to `false` on a `selenium.*` or `playwright.*` activity breaks browser sessions — see
+[Activities that are already local by default](../concepts/activities.md#activities-that-are-already-local-by-default).
 
 ---
 

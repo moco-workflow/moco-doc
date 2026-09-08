@@ -56,7 +56,7 @@ Activities allow you to:
 | `output_name` | string | Variable to store activity result |
 | `output_data` | list | Transform result before storing |
 | `retry_policy` | dict | Nested timeout/retry config (Temporal only): `timeout_sec` (per-attempt execution timeout), `schedule_to_close_timeout_sec`, `heartbeat_timeout_sec`, `heartbeat_interval_sec` (heartbeat cadence; heartbeating is enabled only when both `heartbeat_timeout_sec` and `heartbeat_interval_sec` are set), `max_attempts` (total attempts = initial + retries), `initial_interval_sec`, `backoff_coefficient`, `maximum_interval_sec`, `non_retryable_error_types` |
-| `execute_locally` | boolean | Force local execution (bypass Temporal) |
+| `execute_locally` | boolean | Force local execution (bypass Temporal). Overrides the activity's own default — see [Local Execution](#local-execution) |
 | `enable_cache` | boolean | Enable result caching |
 | `cache_policy` | dict | Cache configuration |
 
@@ -216,9 +216,16 @@ context:
     table_name: "product_docs"                          # physical table is data_product_docs
   embed_model_info:
     apikey_secret_key: "MY_LLM_TOKEN"
+    base_url: "https://my-gateway/v1"       # or MOCO_LLM_DEFAULT_BASE_URL
     model_name: "text-embedding-3-small"    # or MOCO_LLM_DEFAULT_EMBED_MODEL_NAME
     embed_dim: 1536                         # must match the model and the existing table
 ```
+
+`base_url` is the full base URL of an OpenAI-compatible endpoint and is used exactly as given —
+include the version path. That is `https://my-gateway/v1` for most gateways,
+`http://localhost:11434/v1` for Ollama, and
+`https://generativelanguage.googleapis.com/v1beta/openai/` for Gemini. The same rule applies to
+`llm_model_info.base_url` and to `openai.chat.completions`.
 
 #### Indexing from the web
 
@@ -237,11 +244,33 @@ rather than failing the run:
       chunk_size: 1024
       chunk_overlap: 200
       overwrite: true                 # replace the table's contents; false appends
+      embed_batch_size: 64            # chunks per batch; only affects progress cadence
       metadata:                       # attached to every chunk, filterable at query time
         collection: "product-docs"
     output_name: index_result         # -> indexed_sources, failed_sources, document_count,
                                       #    node_count, table_name, source_type
 ```
+
+#### Watching an index run
+
+Indexing a repository or a whole site takes minutes, most of it spent embedding. Run with
+`--debug` and the activity reports each phase as it happens, instead of returning one result at
+the end:
+
+```
+$ moco run index-docs.yaml --debug
+15:02:11 [llama_index.index_web] load_start  loading web sources
+15:02:19 [llama_index.index_web] load_end  loaded 142 documents (3 failed)
+15:02:21 [llama_index.index_web] chunk_end  split into 1832 chunks
+15:02:21 [llama_index.index_web] write_start  embedding and writing 1832 chunks
+15:02:34 [llama_index.index_web] write_progress 4%  embedded 64/1832 chunks
+...
+15:06:02 [llama_index.index_web] write_end  wrote 1832 chunks to product_docs
+```
+
+Running a local YAML file enables debug mode automatically, so the flag is only needed for a
+deployed workflow. One progress line appears per `embed_batch_size` chunks — raise it for a
+quieter run. Without debug mode nothing is published and the indexing itself is unchanged.
 
 The `loader` decides how a URL becomes text. Only `download` handles non-HTML formats, and the
 `simple` and `async` loaders fetch pages themselves, so they do not see moco's proxy settings:
@@ -552,6 +581,113 @@ activity's `retry_policy`.
 A complete runnable example — create a folder, upload a report, list it, download it back and
 clean up — lives in `moco-examples/gdrive-demo/`.
 
+### Claude Agent
+
+`claude_agent.query` runs a full Claude Agent SDK loop inside one activity. The agent reasons over
+multiple turns and calls tools autonomously; the activity returns its final result.
+
+Use it when a step is open-ended enough that you cannot specify it in advance ("investigate why
+this job failed and summarise the cause"). For a single prompt-and-response, use
+`openai.chat.completions` instead — an agent loop is slower and more expensive.
+
+:::warning Deny-by-default, and enabled per deployment
+The agent starts with **no capabilities**. Every tool must be granted explicitly under
+`capabilities`. The activity also refuses to run unless the worker sets
+`MOCO_CLAUDE_AGENT_ENABLED=true`.
+
+This matters because the agent reads content you do not control (web pages, documents, tool
+output) and then acts with the *calling user's* privileges. Grant the smallest set of tools the
+task needs.
+:::
+
+```yaml
+- activity:
+    type: claude_agent.query
+    name: investigate
+    input_data:
+      apikey_secret_key: "global/ANTHROPIC_API_KEY"
+      prompt: |
+        Find out what https://api.github.com/zen returns and summarise it.
+      capabilities:
+        # Moco activities exposed to the agent as tools. They run through the normal
+        # providers under the calling user, so the agent can never exceed that user's
+        # own privileges.
+        moco_tools:
+          - http.request
+      max_turns: 8
+      max_tool_calls: 5
+      timeout_sec: 300
+      relay_topic: agent.progress      # optional: stream progress as workflow events
+      relay_granularity: turn
+    output_name: investigation
+```
+
+Key output fields: `result` (the answer), `num_turns`, `total_cost_usd`, `tool_calls`,
+`denied_tools`, `timed_out`. A successful run with a non-empty `denied_tools` usually means the
+capability grant was too narrow for the prompt.
+
+**Capabilities**
+
+| Field | Purpose |
+|---|---|
+| `builtin_tools` | Claude Code built-ins, e.g. `["Read", "Grep", "Glob"]`. Tools not listed do not exist in the agent's context. |
+| `moco_tools` | Moco activity types exposed as `mcp__moco__<name>` tools. |
+| `mcp_servers` / `mcp_tools` | External MCP servers (remote `http`/`sse` only) and the tools allowed from them. |
+| `plugins` / `skills` | Claude Agent plugins installed on the worker, and the skills to enable. See below. |
+
+Granting `Bash`, `Write`, `Edit` or `NotebookEdit` requires elevated authorization — those either
+execute arbitrary code or mutate the filesystem, and `Bash` can read the agent's own process
+environment.
+
+Secret, state, deploy, shell and workflow-execution activities can never be bridged, at any
+privilege level. External MCP servers must be remote; stdio servers are rejected because their
+config is arbitrary process spawn on the worker. Credentials for remote servers go in
+`headers_secret_key`, naming a secret that holds a JSON object of headers.
+
+**Plugins**
+
+A [Claude Agent plugin](https://code.claude.com/docs/en/plugins) bundles skills, commands,
+subagents and hooks. Plugins are baked into the worker image and discovered from
+`MOCO_CLAUDE_AGENT_PLUGIN_ROOT` — every immediate subdirectory of that root is one available
+plugin. A workflow selects among them **by name**; it can never supply a path.
+
+```yaml
+capabilities:
+  plugins:
+    - deployment-tools          # name from the deployment's catalog
+  skills:
+    - deployment-tools:rollback # <plugin-name>:<skill-name>
+```
+
+The plugin's name is the `name` in its `.claude-plugin/plugin.json`, falling back to its directory
+name. Ask your operator which plugins are installed; naming one that is not produces an error
+listing what is available.
+
+Granting a skill implies the `Skill` tool, so you do not need to add it to `builtin_tools`.
+
+:::danger Plugins run code on the worker
+A plugin's hooks execute shell commands on lifecycle events, **outside the tool permission
+system** — they fire even for an agent granted no tools at all. Loading a plugin is therefore
+equivalent to granting code execution, and requires the same elevated authorization as `Bash`.
+
+Select no plugins (the default) and no plugin code runs.
+:::
+
+:::note Plugin MCP servers are not available
+MCP servers declared inside a plugin's `.mcp.json` are deliberately suppressed: surfacing them
+would require handing the agent the complete built-in tool set, including `Bash`. Declare the
+server under `capabilities.mcp_servers` instead.
+:::
+
+:::note No session resumption
+Each run gets a private temporary working directory that is deleted afterwards, and the CLI keys
+its session transcripts to that directory on local disk. Sessions therefore cannot be resumed
+across activity runs. Model a multi-turn conversation by looping in the workflow and passing prior
+context back through `prompt`.
+:::
+
+A runnable example lives in `moco-examples/claude-agent-demo/`.
+
 ## Config vs Input Data
 
 Activities support two types of parameters:
@@ -675,6 +811,45 @@ Force activities to run in the workflow process (bypass Temporal workers):
 - Don't get automatic retries
 - Run in workflow process (blocking)
 - Can impact workflow performance
+
+### Activities that are already local by default
+
+Some activities set `execute_locally` for you, so you don't have to write it. Short built-ins
+like `builtin.now` and `builtin.delay` do it because a queue round trip would cost more than
+the work itself.
+
+**All browser automation activities — every `selenium.*` and `playwright.*` type — default to
+local execution**, and for a different reason: they need to stay on the same worker as the
+workflow.
+
+A browser session belongs to the process that opened it. The `session_id` you get back from
+`browser.create` is only meaningful there, so if `nav.goto` or `element.click` ran somewhere
+else, they would not find the browser. Running these activities locally keeps a whole
+session — from `browser.create` to `browser.close` — on one worker, so a multi-step browser
+script works the way you'd expect:
+
+```yaml
+- activity:
+    type: playwright.browser.create      # execute_locally is already true
+    input_data:
+      browser_type: chromium
+    output_name: session
+
+- activity:
+    type: playwright.page.goto           # runs on the same worker as above
+    input_data:
+      session_id: "{{ session['session_id'] }}"
+      url: https://example.com
+
+- activity:
+    type: playwright.browser.close
+    input_data:
+      session_id: "{{ session['session_id'] }}"
+```
+
+**Don't set `execute_locally: false` on a browser activity.** The workflow will still validate
+and start, but the session will no longer be pinned to one worker and any step after
+`browser.create` can fail with an unknown session.
 
 ## Output Transformation
 

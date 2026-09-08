@@ -258,6 +258,11 @@ Use for:
 - Operations that don't benefit from retries
 - Reducing worker overhead
 
+Some activities are local by default and need no `execute_locally` from you. Notably, every
+`selenium.*` and `playwright.*` activity is, so that a browser session stays on the same worker
+as the workflow that opened it — see
+[Activities that are already local by default](./activities.md#activities-that-are-already-local-by-default).
+
 ## Testing with Both Runtimes
 
 Write tests that work with both runtimes:

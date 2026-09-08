@@ -265,7 +265,11 @@ activity:
   - `backoff_coefficient`: Optional exponential backoff multiplier
   - `maximum_interval_sec`: Optional cap on retry backoff interval
   - `non_retryable_error_types`: Optional list of error types that skip retries
-- `execute_locally`: Force local execution (bypass Temporal)
+- `execute_locally`: Force local execution (bypass Temporal). Overrides whatever the activity
+  itself defaults to; omit it to keep that default. Some activities are already local — every
+  `selenium.*` and `playwright.*` type is, so a browser session stays on one worker, and setting
+  `false` there breaks sessions. See
+  [Activities that are already local by default](../concepts/activities.md#activities-that-are-already-local-by-default)
 - `enable_cache`: Enable result caching
 - `cache_policy`: Cache policy configuration
 - `async_mode`: Start the activity without blocking. The activity resolves to a token string

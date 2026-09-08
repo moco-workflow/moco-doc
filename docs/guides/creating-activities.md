@@ -83,6 +83,12 @@ class MyActivityProvider(IActivityProvider):
 | `execute_locally` | bool | Always run locally, bypassing Temporal dispatch |
 | `default_retry_policy` | RetryPolicy | Default timeout/retry configuration (default: `RetryPolicy(timeout_sec=60, max_attempts=3)`) |
 
+Set `execute_locally=True` for work short enough that a queue round trip would dominate it, or
+when several of your activities must share process-local state. The browser providers
+(`selenium.*`, `playwright.*`) do the latter: a session handle only resolves in the process that
+created it, so running locally keeps the whole session on one worker. See
+[Activities that are already local by default](../concepts/activities.md#activities-that-are-already-local-by-default).
+
 ### ActivityRequest Fields
 
 | Field | Type | Description |
