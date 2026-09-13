@@ -5,7 +5,7 @@ sidebar_position: 3
 
 # Creating Custom Activities
 
-Activities are the bridge between Moco workflows and the outside world. Moco ships with built-in activities (`builtin.http_request`, `builtin.delay`, etc.), but you can add your own for database queries, proprietary APIs, complex calculations, or any other custom logic.
+Activities are the bridge between Moco workflows and the outside world. Moco ships with built-in activities (`http.request`, `builtin.delay`, etc.), but you can add your own for database queries, proprietary APIs, complex calculations, or any other custom logic.
 
 ---
 

@@ -54,7 +54,7 @@ body:
             - status: "starting"
 
       - activity:
-          type: builtin.http_request
+          type: http.request
           input_data:
             method: GET
             url: "{{ base_url }}/orders/{{ order_id }}"
@@ -75,14 +75,14 @@ Use `parallel` to run independent steps concurrently:
     elements:
       - activity:
           name: fetch-user
-          type: builtin.http_request
+          type: http.request
           input_data:
             url: "{{ base_url }}/users/{{ user_id }}"
           output_name: user
 
       - activity:
           name: fetch-inventory
-          type: builtin.http_request
+          type: http.request
           input_data:
             url: "{{ base_url }}/inventory/{{ product_id }}"
           output_name: inventory
@@ -147,7 +147,7 @@ Assign an `output_name` to capture what an activity returns:
 
 ```yaml
 - activity:
-    type: builtin.http_request
+    type: http.request
     input_data:
       url: https://api.example.com/data
     output_name: api_response
@@ -191,11 +191,11 @@ For branching, combine `condition` with `abort`:
 
 ## Calling HTTP APIs
 
-The `builtin.http_request` activity handles most API integrations:
+The `http.request` activity handles most API integrations:
 
 ```yaml
 - activity:
-    type: builtin.http_request
+    type: http.request
     config_data:
       base_url: https://api.example.com
       headers:
@@ -266,7 +266,7 @@ Activities retry automatically on failure. Override defaults per activity:
 
 ```yaml
 - activity:
-    type: builtin.http_request
+    type: http.request
     input_data:
       url: https://flaky-api.example.com/data
     output_name: result
@@ -281,7 +281,7 @@ Avoid redundant work by caching activity results:
 
 ```yaml
 - activity:
-    type: builtin.http_request
+    type: http.request
     input_data:
       url: https://api.example.com/reference-data
     output_name: ref_data
@@ -317,7 +317,7 @@ body:
 
       # Fetch order
       - activity:
-          type: builtin.http_request
+          type: http.request
           input_data:
             method: GET
             url: https://api.example.com/orders/{{ order_id }}
@@ -331,7 +331,7 @@ body:
           elements:
             - activity:
                 name: charge-payment
-                type: builtin.http_request
+                type: http.request
                 input_data:
                   method: POST
                   url: https://payments.example.com/charge
@@ -344,7 +344,7 @@ body:
 
             - activity:
                 name: send-confirmation
-                type: builtin.http_request
+                type: http.request
                 input_data:
                   method: POST
                   url: https://email.example.com/send
@@ -366,4 +366,4 @@ body:
 - [Creating Custom Activities](./creating-activities.md) — extend Moco with your own activity types
 - [Testing Workflows](./testing.md) — unit and integration testing patterns
 - [Statements Reference](../reference/statements.md) — complete statement syntax
-- [Workflowspec Reference](../reference/workflowspec.md) — expressions, conditions, variable modifiers, and more
+- [Workflowspec Reference](../reference/workflowspec-reference.md) — expressions, conditions, variable modifiers, and more

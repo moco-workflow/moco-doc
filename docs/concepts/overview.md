@@ -88,7 +88,7 @@ Activities are external functions or services that workflows can invoke:
 
 ```yaml
 - activity:
-    type: builtin.http_request
+    type: http.request
     input_data:
       method: GET
       url: https://api.example.com/data

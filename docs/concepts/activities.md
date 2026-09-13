@@ -28,7 +28,7 @@ Activities allow you to:
 
 ```yaml
 - activity:
-    type: builtin.http_request      # Activity type identifier
+    type: http.request      # Activity type identifier
     input_data:                      # Input parameters
       method: GET
       url: https://api.example.com/users/123
@@ -44,7 +44,7 @@ Activities allow you to:
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `type` | string | Activity type identifier (e.g., "builtin.http_request") |
+| `type` | string | Activity type identifier (e.g., "http.request") |
 
 ### Optional
 
@@ -62,25 +62,28 @@ Activities allow you to:
 
 ## Built-in Activities
 
-Moco includes several built-in activities:
+Moco ships 174 activities across 19 providers — HTTP, shell, SQL, email, Kafka, RabbitMQ, Google
+Drive, browser automation, LLM and RAG activities, and the platform's own state, secret and
+deployment activities. The [Activity Catalog](../reference/activity-catalog.md) indexes every one
+of them, and each provider has a reference page giving the input and output contract of its
+activities with worked examples.
+
+A few you will reach for constantly:
 
 ### HTTP Request
 
-Make HTTP requests to external APIs:
+Make HTTP requests to external APIs — see [HTTP Activities](../reference/activities/http.md):
 
 ```yaml
 # GET request
 - activity:
-    type: builtin.http_request
+    type: http.request
     input_data:
       method: GET
-      url: https://api.example.com/data
+      url: https://api.example.com/data?limit=10&offset=0
       headers:
-        Authorization: "Bearer {{ token }}"
         Accept: application/json
-      params:
-        limit: 10
-        offset: 0
+      output_json: true
     output_name: api_response
     retry_policy:
       timeout_sec: 30
@@ -89,13 +92,11 @@ Make HTTP requests to external APIs:
 ```yaml
 # POST request with JSON body
 - activity:
-    type: builtin.http_request
+    type: http.request
     input_data:
       method: POST
       url: https://api.example.com/orders
-      headers:
-        Content-Type: application/json
-      body:
+      json_data:
         order_id: "{{ order_id }}"
         items: "{{ items }}"
         total: "{{ total }}"
@@ -104,35 +105,37 @@ Make HTTP requests to external APIs:
 
 ### Delay
 
-Pause workflow execution:
+Pause workflow execution — see [Built-in Core](../reference/activities/builtin-core.md):
 
 ```yaml
 - activity:
     type: builtin.delay
     input_data:
-      duration: 5s      # Seconds: 5s, minutes: 5m, hours: 5h
+      duration: 5s      # seconds: 5s, minutes: 5min, hours: 1h30m
 ```
 
 ### State Persistence
 
-Store and retrieve workflow state:
+Store and retrieve values that outlive a single run — see
+[State Store](../reference/activities/state.md):
 
 ```yaml
 # Save state
 - activity:
-    type: builtin.state.save
+    type: builtin.state.set_state
     input_data:
-      key: "user-{{ user_id }}-preferences"
+      namespace: "user-preferences"
+      key: "{{ user_id }}"
       value:
         theme: dark
         notifications: true
-    output_name: save_result
 
 # Load state
 - activity:
-    type: builtin.state.load
+    type: builtin.state.get_state
     input_data:
-      key: "user-{{ user_id }}-preferences"
+      namespace: "user-preferences"
+      key: "{{ user_id }}"
     output_name: preferences
 ```
 
@@ -141,19 +144,14 @@ Store and retrieve workflow state:
 Access secrets securely. Plaintext secrets never travel between activities.
 
 Most activities that need a secret take a **secret key** instead of the secret itself — for
-example `openai.chat.completions.apikey_secret_key`, `email.send.password_secret_key`,
-`sql.query.connection_string_secret_key` or, nested one level down,
-`llama_index.query.vectordb_info.connection_string_secret_key`,
-`llama_index.query.embed_model_info.apikey_secret_key`,
-`llama_index.index_github.auth.token_secret_key` and
-`gdrive.*.auth.credentials_secret_key` (which `llama_index.index_gdrive` reuses
-verbatim). The activity looks the secret up and
-decrypts it internally, so nothing sensitive touches workflow context at all. A bare `NAME`
-resolves a user-scoped secret; `global/NAME` resolves a global one.
+example `openai.chat.completions.apikey_secret_key`, `email.send.password_secret_key` or
+`sql.query.connection_string_secret_key`. The activity looks the secret up and decrypts it
+internally, so nothing sensitive touches workflow context at all. A bare `NAME` resolves a
+user-scoped secret; `global/NAME` resolves a global one.
 
-Where an activity does not yet support that (for example `http.request.encrypted_auth_token`),
-use `builtin.secret.get`, which returns the secret **still encrypted** — pass that blob straight
-to the activity, which decrypts it internally.
+Where an activity does not yet support that (for example `http.request.encrypted_auth_token`), use
+`builtin.secret.get`, which returns the secret **still encrypted** — pass that blob straight to the
+activity, which decrypts it internally.
 
 ```yaml
 - activity:
@@ -165,528 +163,29 @@ to the activity, which decrypts it internally.
     output_name: db_password
 ```
 
-The returned secret **expires after `expiration_seconds`** (60 by default), so a copy that
-leaks into logs, events or workflow history cannot be replayed later. Decrypting an expired
-secret fails with `EncryptedDataExpiredError`.
-
-This matters for long-running workflows: a state machine that waits on events for minutes or
-hours must not fetch the secret once at startup and hold it. Re-run `builtin.secret.get` in
-each state that needs it, so every use gets a freshly minted secret. Passing `0` or a negative
-value disables expiration entirely, which restores the old replayable behaviour — use it only
-when re-fetching genuinely isn't possible.
-
-The stored secret itself never expires; only the copy handed to the workflow does.
-
-Secrets share the persistence store with ordinary workflow state, under the reserved
-namespace `secret` (global) or `<user_id>:secret` (per user). The `builtin.state.*`
-activities refuse that namespace with a `ReservedNamespaceError` — including another user's
-`<user_id>:secret` — and omit it from `builtin.state.list_namespaces`. Secrets are reachable
-only through `builtin.secret.*`, so the expiration above cannot be sidestepped by reading the
-stored blob directly.
-
-### Retrieval-Augmented Generation (RAG)
-
-These activities build and query a vector index over your own documents, so an LLM can answer
-from them instead of from its training data. Documents are chunked and embedded into a
-[pgvector](https://github.com/pgvector/pgvector) table by one of the `llama_index.index_*`
-activities, and `llama_index.query` finds the chunks closest to a question.
-
-There is one indexing activity per document source:
-
-| Activity | Indexes |
-| --- | --- |
-| `llama_index.index_web` | Pages or documents at a list of URLs |
-| `llama_index.index_site` | Every page reachable from one seed — a sitemap, a feed, or a crawl |
-| `llama_index.index_github` | The files of a GitHub or GitHub Enterprise repository |
-| `llama_index.index_gdrive` | A Google Drive folder, file list or query |
-| `llama_index.index_files` | Files already on the worker's disk |
-
-They all share the same chunking, embedding and metadata handling, so a single table can hold
-documents from several sources: every chunk carries `source_url`, `file_name` and
-`source_type`, whichever activity wrote it.
-
-Every one of them takes the same two nested blocks, so build them once in `context` and reuse
-them — the embedding model **must** be identical on both sides, or the similarity scores are
-meaningless:
-
-```yaml
-context:
-  vectordb_info:
-    connection_string_secret_key: "MOCO_PGVECTOR_CONN"  # postgresql://... in the secret store
-    table_name: "product_docs"                          # physical table is data_product_docs
-  embed_model_info:
-    apikey_secret_key: "MY_LLM_TOKEN"
-    base_url: "https://my-gateway/v1"       # or MOCO_LLM_DEFAULT_BASE_URL
-    model_name: "text-embedding-3-small"    # or MOCO_LLM_DEFAULT_EMBED_MODEL_NAME
-    embed_dim: 1536                         # must match the model and the existing table
-```
-
-`base_url` is the full base URL of an OpenAI-compatible endpoint and is used exactly as given —
-include the version path. That is `https://my-gateway/v1` for most gateways,
-`http://localhost:11434/v1` for Ollama, and
-`https://generativelanguage.googleapis.com/v1beta/openai/` for Gemini. The same rule applies to
-`llm_model_info.base_url` and to `openai.chat.completions`.
-
-#### Indexing from the web
-
-`index_web` fetches each URL and parses it. A URL that fails is reported in `failed_sources`
-rather than failing the run:
-
-```yaml
-- activity:
-    type: llama_index.index_web
-    name: index-docs
-    input_data:
-      urls: "{{ doc_urls }}"
-      loader: download                # see the table below
-      vectordb_info: "{{ vectordb_info }}"
-      embed_model_info: "{{ embed_model_info }}"
-      chunk_size: 1024
-      chunk_overlap: 200
-      overwrite: true                 # replace the table's contents; false appends
-      embed_batch_size: 64            # chunks per batch; only affects progress cadence
-      metadata:                       # attached to every chunk, filterable at query time
-        collection: "product-docs"
-    output_name: index_result         # -> indexed_sources, failed_sources, document_count,
-                                      #    node_count, table_name, source_type
-```
-
-#### Watching an index run
-
-Indexing a repository or a whole site takes minutes, most of it spent embedding. Run with
-`--debug` and the activity reports each phase as it happens, instead of returning one result at
-the end:
-
-```
-$ moco run index-docs.yaml --debug
-15:02:11 [llama_index.index_web] load_start  loading web sources
-15:02:19 [llama_index.index_web] load_end  loaded 142 documents (3 failed)
-15:02:21 [llama_index.index_web] chunk_end  split into 1832 chunks
-15:02:21 [llama_index.index_web] write_start  embedding and writing 1832 chunks
-15:02:34 [llama_index.index_web] write_progress 4%  embedded 64/1832 chunks
-...
-15:06:02 [llama_index.index_web] write_end  wrote 1832 chunks to product_docs
-```
-
-Running a local YAML file enables debug mode automatically, so the flag is only needed for a
-deployed workflow. One progress line appears per `embed_batch_size` chunks — raise it for a
-quieter run. Without debug mode nothing is published and the indexing itself is unchanged.
-
-The `loader` decides how a URL becomes text. Only `download` handles non-HTML formats, and the
-`simple` and `async` loaders fetch pages themselves, so they do not see moco's proxy settings:
-
-| `loader` | Extracts | Handles PDF/DOCX | Honours `MOCO_HTTP_PROXY` |
-| --- | --- | --- | --- |
-| `download` *(default)* | The file, parsed by extension | Yes | Yes |
-| `trafilatura` | The main article, without navigation boilerplate | No | Yes |
-| `readability` | The main article, via a headless browser (sees client-rendered pages) | No | Yes |
-| `beautiful_soup` | All page text | No | Yes |
-| `simple` | The whole HTML page as text | No | No |
-| `async` | The whole HTML page as text, fetched concurrently | No | No |
-
-Keep `download` unless the pages are HTML *and* the boilerplate is hurting retrieval quality —
-then reach for `trafilatura`, which indexes the article and leaves the navigation behind.
-
-#### Indexing a whole site
-
-`index_site` takes one seed URL and expands it. `sitemap` reads `sitemap.xml`; `rss` reads a
-feed (indexing each entry's **summary**, not the linked article); `whole_site` walks links with
-a real browser and needs Chrome plus `MOCO_CHROME_DRIVER_PATH` on the worker.
-
-```yaml
-- activity:
-    type: llama_index.index_site
-    input_data:
-      url: "https://docs.example.com/sitemap.xml"
-      crawler: sitemap
-      limit: 200                      # bound the crawl
-      url_filter: "/guides/"          # only sitemap entries containing this
-      vectordb_info: "{{ vectordb_info }}"
-      embed_model_info: "{{ embed_model_info }}"
-```
-
-#### Indexing a GitHub repository
-
-Reads one branch or one `commit_sha`, narrowed by include/exclude filters. Set `auth.base_url`
-for GitHub Enterprise. `auth.token_secret_key` is optional — without it the reader is anonymous,
-which reaches public repositories at a much lower rate limit.
-
-```yaml
-- activity:
-    type: llama_index.index_github
-    input_data:
-      auth:
-        token_secret_key: "GH_TOKEN"
-        base_url: "https://api.github.com"    # or https://<ghe-host>/api/v3
-      owner: "temporalio"
-      repo: "documentation"
-      branch: "main"
-      include_directories: ["docs"]           # exclude_directories is the other way round
-      include_extensions: [".md", ".mdx"]
-      vectordb_info: "{{ vectordb_info }}"
-      embed_model_info: "{{ embed_model_info }}"
-```
-
-#### Indexing Google Drive
-
-Takes the same `auth` block as the `gdrive.*` activities, so define it once and share it.
-
-```yaml
-- activity:
-    type: llama_index.index_gdrive
-    input_data:
-      auth: "{{ gdrive_auth }}"       # credentials_secret_key -> service-account key JSON
-      folder_id: "{{ folder_id }}"    # or file_ids: [...], or query_string: "name contains 'Q1'"
-      vectordb_info: "{{ vectordb_info }}"
-      embed_model_info: "{{ embed_model_info }}"
-```
-
-:::caution
-`index_gdrive` **rejects** `auth.impersonate_user` and `auth.scopes` rather than silently
-ignoring them: the underlying reader always acts as the service account itself. Either share
-the folder with the service account, or — if you need domain-wide delegation — use
-`gdrive.download` (which does support it) with `output_format: file`, then
-`llama_index.index_files` over the downloaded directory.
-:::
-
-#### Indexing local files
-
-`index_files` parses a directory already on the worker. `path` is resolved under
-`MOCO_RAG_FILE_DIR` and a path escaping that root is rejected.
-
-```yaml
-- activity:
-    type: llama_index.index_files
-    input_data:
-      path: "reports/q1"
-      required_extensions: [".pdf", ".md"]
-      vectordb_info: "{{ vectordb_info }}"
-      embed_model_info: "{{ embed_model_info }}"
-```
-
-#### Querying
-
-Querying has two modes. `retrieve` returns the matching chunks and nothing else, leaving the
-prompt to you — useful when you want to force citations or a specific refusal:
-
-```yaml
-- activity:
-    type: llama_index.query
-    name: retrieve-chunks
-    input_data:
-      query: "{{ question }}"
-      vectordb_info: "{{ vectordb_info }}"
-      embed_model_info: "{{ embed_model_info }}"
-      top_k: 5
-      response_mode: retrieve
-      filters:
-        collection: "product-docs"
-    output_name: hits     # -> nodes[{node_id, text, score, metadata}], node_count, answer=null
-```
-
-`synthesize` additionally has an LLM write the answer, returning it as `answer` alongside the
-source `nodes`. It needs an `llm_model_info` block (its `apikey_secret_key` defaults to the
-embedding one, since the two usually share a gateway):
-
-```yaml
-- activity:
-    type: llama_index.query
-    name: answer-question
-    input_data:
-      query: "{{ question }}"
-      vectordb_info: "{{ vectordb_info }}"
-      embed_model_info: "{{ embed_model_info }}"
-      llm_model_info:
-        model_name: "{{ chat_model }}"
-      top_k: 5
-      response_mode: synthesize
-    output_name: rag_answer          # -> answer, nodes, node_count
-```
-
-:::note
-Every `index_*` activity writes rows and is **not** retried by default (`max_attempts: 1`) — a
-retry would duplicate chunks. Use `overwrite: true` to make re-runs idempotent. The database
-needs the `vector` extension enabled; `moco-db` does this for you.
-:::
-
-:::caution
-`overwrite: true` empties the **whole table**, not just the documents that activity is about to
-write. When you feed one `table_name` from several sources — say web pages plus a repository —
-set it on the first activity only, or the second will discard what the first just indexed.
-:::
-
-:::info Deprecated
-`llama_index.index_docs` still works but is deprecated in favour of `llama_index.index_web`,
-whose default `loader: download` reproduces its behaviour exactly. To migrate, rename the
-activity, rename `document_urls` to `urls`, and read `indexed_sources` / `failed_sources`
-instead of `indexed_urls` / `failed_urls`.
-:::
-
-A complete runnable example, contrasting both query modes over the same question, lives in
-`moco-examples/rag-demo/`.
-
-### Google Drive
-
-Six activities read and write files in Google Drive: `gdrive.download`, `gdrive.upload`,
-`gdrive.list`, `gdrive.get_metadata`, `gdrive.create_folder` and `gdrive.delete`. Together they
-cover picking up a file someone dropped in a shared folder, and publishing a generated report
-back to one.
-
-All six authenticate as a **service account**, whose key JSON lives in the secret store. Define
-the `auth` block once in `context` and reference it everywhere:
-
-```yaml
-context:
-  gdrive_auth:
-    credentials_secret_key: "GDRIVE_SERVICE_ACCOUNT"  # the whole key JSON, in the secret store
-    # impersonate_user: "ops@example.com"   # optional: act as a user via domain-wide delegation
-    # scopes: ["https://www.googleapis.com/auth/drive.readonly"]   # optional: narrow the access
-```
-
-:::caution
-A service account has its own empty Drive. It can only see files and folders **explicitly
-shared with its email address** — so share the target folder with the service account before
-the first run, or set `impersonate_user` and configure domain-wide delegation.
-:::
-
-#### Content moves in one of two formats
-
-Every download and upload picks a `format`:
-
-| Format | Where the bytes live | Use it when |
-| --- | --- | --- |
-| `base64` (default) | Inline in workflow context, as a base64 string | The file is small and a later step needs its content |
-| `file` | On the worker's filesystem, under `MOCO_GDRIVE_FILE_DIR` | The file is large, or a later `shell.run` needs it on disk |
-
-`base64` copies the payload into workflow history, so keep it to small files. `file` paths are
-always relative to `MOCO_GDRIVE_FILE_DIR` (default `/tmp/moco/gdrive`); paths that escape that
-directory are rejected. Either way a single transfer is capped at `MOCO_GDRIVE_MAX_FILE_SIZE_MB`
-(default 256).
-
-#### Finding and downloading a file
-
-`gdrive.list` resolves a name to a `file_id`. Pass `parent_folder_id` and/or `name_contains`, or
-take over completely with a raw [Drive query string](https://developers.google.com/drive/api/guides/search-files)
-in `query`:
-
-```yaml
-- activity:
-    type: gdrive.list
-    name: find-latest-report
-    input_data:
-      auth: "{{ gdrive_auth }}"
-      parent_folder_id: "{{ inbox_folder_id }}"
-      name_contains: "monthly-report"
-      order_by: "modifiedTime desc"
-      page_size: 10
-    output_name: found      # -> files[{file_id, name, mime_type, size_bytes, ...}], file_count,
-                            #    next_page_token
-```
-
-```yaml
-- activity:
-    type: gdrive.download
-    name: fetch-report
-    input_data:
-      file_id: "{{ found.files[0].file_id }}"
-      auth: "{{ gdrive_auth }}"
-      output_format: base64           # or 'file' plus a file_path
-    output_name: report   # -> file_id, name, mime_type, size_bytes, format, data, exported
-```
-
-`output_data.data` holds the base64 content, or — with `output_format: file` — the absolute path
-the content was written to. `format` echoes which, so a downstream step can branch on it.
-
-**Google-native documents** (Docs, Sheets, Slides, Drawings) have no stored bytes and cannot be
-downloaded directly; they are exported automatically to `.docx`, `.xlsx`, `.pptx` and `.pdf`
-respectively, and `exported: true` says so. Set `export_mime_type: application/pdf` to get a PDF
-of any of them instead.
-
-#### Uploading
-
-Supply the content inline as base64, or read it from the worker's disk:
-
-```yaml
-- activity:
-    type: gdrive.upload
-    name: publish-summary
-    input_data:
-      name: "summary-{{ run_date }}.csv"
-      auth: "{{ gdrive_auth }}"
-      data: "{{ base64.b64encode(summary_csv.encode()).decode() }}"
-      parent_folder_id: "{{ output_folder_id }}"
-      mime_type: "text/csv"       # optional; guessed from the file name when omitted
-    output_name: published        # -> file_id, name, mime_type, size_bytes, web_view_link, parents
-```
-
-```yaml
-- activity:
-    type: gdrive.upload
-    name: publish-large-export
-    input_data:
-      name: "export.parquet"
-      auth: "{{ gdrive_auth }}"
-      source_format: file
-      file_path: "exports/export.parquet"   # relative to MOCO_GDRIVE_FILE_DIR
-      parent_folder_id: "{{ output_folder_id }}"
-    output_name: published
-```
-
-Set `mime_type` to a Google-native type (e.g. `application/vnd.google-apps.spreadsheet`) to have
-Drive convert the upload into a native document as it lands. Conversion needs to know the format
-to convert *from*, which is taken from the file name — add `source_mime_type: text/csv` when the
-name has no useful extension:
-
-```yaml
-- activity:
-    type: gdrive.upload
-    input_data:
-      name: "Q3 numbers"          # no extension, so the source format can't be guessed
-      auth: "{{ gdrive_auth }}"
-      data: "{{ base64.b64encode(csv_text.encode()).decode() }}"
-      mime_type: "application/vnd.google-apps.spreadsheet"   # target: a real Google Sheet
-      source_mime_type: "text/csv"                           # what the bytes actually are
-```
-
-#### Folders, metadata and deletion
-
-```yaml
-- activity:
-    type: gdrive.create_folder
-    input_data:
-      name: "{{ run_date }}"
-      auth: "{{ gdrive_auth }}"
-      parent_folder_id: "{{ archive_folder_id }}"
-      skip_if_exists: true      # reuse a folder of this name instead of creating a second one
-    output_name: run_folder     # -> folder{file_id, name, ...}, created
-
-- activity:
-    type: gdrive.delete
-    input_data:
-      file_id: "{{ stale_file_id }}"
-      auth: "{{ gdrive_auth }}"
-      permanent: false          # move to trash (default); true deletes outright
-    output_name: deleted        # -> file_id, permanent
-```
-
-:::note
-The three write activities — `upload`, `create_folder` and `delete` — are **not retried** by
-default (`max_attempts: 1`). Drive allows several files to share a name in one folder, so a
-retried create leaves a duplicate behind. The idempotent paths are `upload` with an explicit
-`file_id` (which replaces that file's contents in place) and `create_folder` with
-`skip_if_exists: true`; with either of those set it is safe to raise `max_attempts` via the
-activity's `retry_policy`.
-:::
-
-A complete runnable example — create a folder, upload a report, list it, download it back and
-clean up — lives in `moco-examples/gdrive-demo/`.
-
-### Claude Agent
-
-`claude_agent.query` runs a full Claude Agent SDK loop inside one activity. The agent reasons over
-multiple turns and calls tools autonomously; the activity returns its final result.
-
-Use it when a step is open-ended enough that you cannot specify it in advance ("investigate why
-this job failed and summarise the cause"). For a single prompt-and-response, use
-`openai.chat.completions` instead — an agent loop is slower and more expensive.
-
-:::warning Deny-by-default, and enabled per deployment
-The agent starts with **no capabilities**. Every tool must be granted explicitly under
-`capabilities`. The activity also refuses to run unless the worker sets
-`MOCO_CLAUDE_AGENT_ENABLED=true`.
-
-This matters because the agent reads content you do not control (web pages, documents, tool
-output) and then acts with the *calling user's* privileges. Grant the smallest set of tools the
-task needs.
-:::
-
-```yaml
-- activity:
-    type: claude_agent.query
-    name: investigate
-    input_data:
-      apikey_secret_key: "global/ANTHROPIC_API_KEY"
-      prompt: |
-        Find out what https://api.github.com/zen returns and summarise it.
-      capabilities:
-        # Moco activities exposed to the agent as tools. They run through the normal
-        # providers under the calling user, so the agent can never exceed that user's
-        # own privileges.
-        moco_tools:
-          - http.request
-      max_turns: 8
-      max_tool_calls: 5
-      timeout_sec: 300
-      relay_topic: agent.progress      # optional: stream progress as workflow events
-      relay_granularity: turn
-    output_name: investigation
-```
-
-Key output fields: `result` (the answer), `num_turns`, `total_cost_usd`, `tool_calls`,
-`denied_tools`, `timed_out`. A successful run with a non-empty `denied_tools` usually means the
-capability grant was too narrow for the prompt.
-
-**Capabilities**
-
-| Field | Purpose |
-|---|---|
-| `builtin_tools` | Claude Code built-ins, e.g. `["Read", "Grep", "Glob"]`. Tools not listed do not exist in the agent's context. |
-| `moco_tools` | Moco activity types exposed as `mcp__moco__<name>` tools. |
-| `mcp_servers` / `mcp_tools` | External MCP servers (remote `http`/`sse` only) and the tools allowed from them. |
-| `plugins` / `skills` | Claude Agent plugins installed on the worker, and the skills to enable. See below. |
-
-Granting `Bash`, `Write`, `Edit` or `NotebookEdit` requires elevated authorization — those either
-execute arbitrary code or mutate the filesystem, and `Bash` can read the agent's own process
-environment.
-
-Secret, state, deploy, shell and workflow-execution activities can never be bridged, at any
-privilege level. External MCP servers must be remote; stdio servers are rejected because their
-config is arbitrary process spawn on the worker. Credentials for remote servers go in
-`headers_secret_key`, naming a secret that holds a JSON object of headers.
-
-**Plugins**
-
-A [Claude Agent plugin](https://code.claude.com/docs/en/plugins) bundles skills, commands,
-subagents and hooks. Plugins are baked into the worker image and discovered from
-`MOCO_CLAUDE_AGENT_PLUGIN_ROOT` — every immediate subdirectory of that root is one available
-plugin. A workflow selects among them **by name**; it can never supply a path.
-
-```yaml
-capabilities:
-  plugins:
-    - deployment-tools          # name from the deployment's catalog
-  skills:
-    - deployment-tools:rollback # <plugin-name>:<skill-name>
-```
-
-The plugin's name is the `name` in its `.claude-plugin/plugin.json`, falling back to its directory
-name. Ask your operator which plugins are installed; naming one that is not produces an error
-listing what is available.
-
-Granting a skill implies the `Skill` tool, so you do not need to add it to `builtin_tools`.
-
-:::danger Plugins run code on the worker
-A plugin's hooks execute shell commands on lifecycle events, **outside the tool permission
-system** — they fire even for an agent granted no tools at all. Loading a plugin is therefore
-equivalent to granting code execution, and requires the same elevated authorization as `Bash`.
-
-Select no plugins (the default) and no plugin code runs.
-:::
-
-:::note Plugin MCP servers are not available
-MCP servers declared inside a plugin's `.mcp.json` are deliberately suppressed: surfacing them
-would require handing the agent the complete built-in tool set, including `Bash`. Declare the
-server under `capabilities.mcp_servers` instead.
-:::
-
-:::note No session resumption
-Each run gets a private temporary working directory that is deleted afterwards, and the CLI keys
-its session transcripts to that directory on local disk. Sessions therefore cannot be resumed
-across activity runs. Model a multi-turn conversation by looping in the workflow and passing prior
-context back through `prompt`.
-:::
-
-A runnable example lives in `moco-examples/claude-agent-demo/`.
+The returned secret **expires after `expiration_seconds`**, so a long-running workflow must re-run
+`builtin.secret.get` rather than holding the result. The full list of secret-bearing fields, the
+encryption model and the reserved-namespace rules are in
+[Secret Activities](../reference/activities/secret.md).
+
+### AI and retrieval
+
+`openai.chat.completions` runs a single prompt-and-response; `claude_agent.query` runs an
+autonomous multi-turn agent with explicitly granted tools; the `llama_index.*` activities build and
+query a vector index over your own documents so an LLM can answer from them. See
+[OpenAI](../reference/activities/openai.md),
+[Claude Agent](../reference/activities/claude-agent.md) and
+[LlamaIndex](../reference/activities/llama-index.md), with runnable examples in
+`moco-examples/openai-demo/`, `moco-examples/claude-agent-demo/` and `moco-examples/rag-demo/`.
+
+### Files, messaging and browsers
+
+`gdrive.*` reads and writes Google Drive files; `kafka.*`, `rabbit.*`, `graphql.subscribe` and
+`websocket.subscribe` connect a workflow to message buses and live feeds; `playwright.*` and
+`selenium.*` drive a real browser. See
+[Google Drive](../reference/activities/gdrive.md),
+[Kafka](../reference/activities/kafka.md), [RabbitMQ](../reference/activities/rabbit.md) and
+[Playwright](../reference/activities/playwright.md).
 
 ## Config vs Input Data
 
@@ -738,7 +237,7 @@ Set maximum execution time:
 
 ```yaml
 - activity:
-    type: builtin.http_request
+    type: http.request
     input_data:
       url: https://slow-api.com/data
     retry_policy:
@@ -752,7 +251,7 @@ Configure automatic retries on failure:
 
 ```yaml
 - activity:
-    type: builtin.http_request
+    type: http.request
     input_data:
       url: https://unreliable-api.com/data
     retry_policy:
@@ -773,7 +272,7 @@ Enable caching to avoid redundant executions:
 
 ```yaml
 - activity:
-    type: builtin.http_request
+    type: http.request
     input_data:
       url: https://api.example.com/reference-data
     enable_cache: true
@@ -826,30 +325,17 @@ A browser session belongs to the process that opened it. The `session_id` you ge
 `browser.create` is only meaningful there, so if `nav.goto` or `element.click` ran somewhere
 else, they would not find the browser. Running these activities locally keeps a whole
 session — from `browser.create` to `browser.close` — on one worker, so a multi-step browser
-script works the way you'd expect:
-
-```yaml
-- activity:
-    type: playwright.browser.create      # execute_locally is already true
-    input_data:
-      browser_type: chromium
-    output_name: session
-
-- activity:
-    type: playwright.page.goto           # runs on the same worker as above
-    input_data:
-      session_id: "{{ session['session_id'] }}"
-      url: https://example.com
-
-- activity:
-    type: playwright.browser.close
-    input_data:
-      session_id: "{{ session['session_id'] }}"
-```
+script works the way you'd expect.
 
 **Don't set `execute_locally: false` on a browser activity.** The workflow will still validate
 and start, but the session will no longer be pinned to one worker and any step after
-`browser.create` can fail with an unknown session.
+`browser.create` can fail with an unknown session. See
+[Playwright](../reference/activities/playwright.md) and
+[Selenium](../reference/activities/selenium.md) for the full session model.
+
+Conversely, an activity served by a *different* worker type can never run locally.
+[`claude_agent.query`](../reference/activities/claude-agent.md) is the only one today: it runs on
+the `agent` worker, so `execute_locally` has no effect on it.
 
 ## Output Transformation
 
@@ -857,7 +343,7 @@ Transform activity results before storing:
 
 ```yaml
 - activity:
-    type: builtin.http_request
+    type: http.request
     input_data:
       url: https://api.example.com/users
     output_data:
@@ -1025,6 +511,7 @@ async def execute(self, config_data, input_data, context):
 
 ## Next Steps
 
-- [State Machines Reference](../reference/state-machines.md)
-- [Events Reference](../reference/events.md)
+- [Activity Catalog](../reference/activity-catalog.md) — every activity, by provider
+- [State Machines Reference](./state-machines.md)
+- [Events Reference](./events.md)
 - [Creating Custom Activities Guide](../guides/creating-activities.md)

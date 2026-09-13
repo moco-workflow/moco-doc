@@ -306,5 +306,5 @@ The console also manages **secrets** (encrypted values referenced from workflows
 - [Statements](./reference/statements.md) — `sequence`, `parallel`, `iteration`, `state_machine`, and more
 - [Expressions](./concepts/expressions.md) — the `{{ }}` expression language
 - [Activities](./concepts/activities.md) — HTTP, Kafka, shell, S3, OpenAI, MCP, and custom activities
-- [State Machines](./reference/state-machines.md) — event-driven and human-in-the-loop workflows
+- [State Machines](./concepts/state-machines.md) — event-driven and human-in-the-loop workflows
 - [Testing](./guides/testing.md) — writing `*.test.yaml` suites for your workflows

@@ -390,5 +390,5 @@ body:
 ## Next Steps
 
 - [Events Reference](./events.md) — how to emit and receive events
-- [Statements Reference](./statements.md) — all statement types including `emit_event` and `wait_for`
+- [Statements Reference](../reference/statements.md) — all statement types including `emit_event` and `wait_for`
 - [Workflowspec Reference](./workflowspec.md) — full technical reference

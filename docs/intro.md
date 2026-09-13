@@ -19,7 +19,7 @@ on demand, independently of the runtime platform.
 
 ## What is Moco
 
-### A YAML-based DSL
+### A Low Code YAML DSL
 
 Moco workflows are written in a YAML-based DSL called a **workflowspec** (or **wfspec**).
 
@@ -252,5 +252,5 @@ body:
 - [Quick Start Guide](./quick-start.md) — get up and running in a few minutes
 - [Core Concepts](./concepts/overview.md) — how Moco works
 - [State Machines](./concepts/state-machines.md) — event-driven workflows
-- [Workflowspec Syntax](./reference/workflowspec-syntax.md) — complete language reference
+- [Workflowspec Syntax](./reference/workflowspec-reference.md) — complete language reference
 - [Using the Moco CLI](./guides/use-moco-cli.md) — run and release workflows

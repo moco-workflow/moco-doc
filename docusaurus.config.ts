@@ -100,7 +100,7 @@ const config: Config = {
             },
             {
               label: 'Workflowspec Reference',
-              to: '/docs/reference/workflowspec',
+              to: '/docs/reference/workflowspec-reference',
             },
           ],
         },

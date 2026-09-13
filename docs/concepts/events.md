@@ -382,5 +382,5 @@ body:
 ## Next Steps
 
 - [State Machines Reference](./state-machines.md) — event-driven FSM patterns
-- [Statements Reference](./statements.md) — full `emit_event` and `wait_for` parameter reference
+- [Statements Reference](../reference/statements.md) — full `emit_event` and `wait_for` parameter reference
 - [Workflowspec Reference](./workflowspec.md) — complete technical reference

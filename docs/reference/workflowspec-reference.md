@@ -235,7 +235,7 @@ Executes a registered activity (external function/service).
 
 ```yaml
 activity:
-  type: builtin.http_request        # Activity type identifier
+  type: http.request        # Activity type identifier
   version: 1.0.0                    # Activity version
   config_data:                      # Static configuration
     method: GET
@@ -249,7 +249,7 @@ activity:
 ```
 
 **Parameters:**
-- `type`: Activity type identifier (e.g., "builtin.http_request")
+- `type`: Activity type identifier (e.g., "http.request")
 - `version`: Activity version (default: "1.0.0")
 - `config_data`: Static configuration (evaluated once)
 - `input_data`: Dynamic input (evaluated per execution)
@@ -276,13 +276,13 @@ activity:
   (`async-activity:<name>:<run id>`, unique per invocation) instead of its result; the result is
   published to the event bus under that token when the activity finishes. Capture it with
   `output_name` and reference it as an expression from a `wait_for` or a transition trigger. See
-  [Async activity results](./events.md#async-activity-results)
+  [Async activity results](../concepts/events.md#async-activity-results)
 - `async_event_topic`: Topic the completion event is published to (default `default`)
 
 **Example: HTTP request**
 ```yaml
 - activity:
-    type: builtin.http_request
+    type: http.request
     input_data:
       method: POST
       url: https://api.example.com/orders
@@ -520,7 +520,7 @@ sequence:
           output_data:
             - status: "validating"
       - activity:
-          type: builtin.http_request
+          type: http.request
           input_data:
             url: https://api.example.com/validate
             body: { order_id: "{{ order_id }}" }
@@ -533,7 +533,7 @@ sequence:
           output_data:
             - status: "processing"
       - activity:
-          type: builtin.http_request
+          type: http.request
           input_data:
             url: https://api.example.com/process
             body: { order_id: "{{ order_id }}" }
@@ -572,19 +572,19 @@ parallel:
     elements:
       - activity:
           name: fetch-user
-          type: builtin.http_request
+          type: http.request
           input_data:
             url: https://api.example.com/users/{{ user_id }}
           output_name: user_data
       - activity:
           name: fetch-orders
-          type: builtin.http_request
+          type: http.request
           input_data:
             url: https://api.example.com/orders?user={{ user_id }}
           output_name: order_data
       - activity:
           name: fetch-preferences
-          type: builtin.http_request
+          type: http.request
           input_data:
             url: https://api.example.com/preferences/{{ user_id }}
           output_name: pref_data
@@ -597,13 +597,13 @@ parallel:
     elements:
       - activity:
           name: primary-api
-          type: builtin.http_request
+          type: http.request
           input_data:
             url: https://primary.api.com/data
           output_name: api_result
       - activity:
           name: backup-api
-          type: builtin.http_request
+          type: http.request
           input_data:
             url: https://backup.api.com/data
           output_name: api_result
@@ -1044,7 +1044,7 @@ Activities are external functions or services executed by the workflow. They are
 
 ```yaml
 - activity:
-    type: builtin.http_request
+    type: http.request
     input_data:
       method: GET
       url: https://api.example.com/data
@@ -1062,7 +1062,7 @@ Activities are external functions or services executed by the workflow. They are
 **POST request with JSON body**
 ```yaml
 - activity:
-    type: builtin.http_request
+    type: http.request
     input_data:
       method: POST
       url: https://api.example.com/orders
@@ -1102,7 +1102,7 @@ honored only by the Temporal runtime (the in-memory runtime ignores it).
 
 ```yaml
 - activity:
-    type: builtin.http_request
+    type: http.request
     input_data:
       url: https://unreliable-api.com/data
     retry_policy:
@@ -1125,7 +1125,7 @@ honored only by the Temporal runtime (the in-memory runtime ignores it).
 
 ```yaml
 - activity:
-    type: builtin.http_request
+    type: http.request
     input_data:
       url: https://api.example.com/reference-data
     enable_cache: true               # Enable result caching
@@ -1141,7 +1141,7 @@ Force activity to run locally (bypass Temporal worker).
 
 ```yaml
 - activity:
-    type: builtin.http_request
+    type: http.request
     input_data:
       url: http://localhost:8080/internal
     execute_locally: true            # Run in workflow process

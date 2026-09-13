@@ -7,7 +7,9 @@ sidebar_position: 2
 
 Statements are the building blocks of Moco workflows. Every `body` in a workflowspec is a statement. Statements fall into two categories: **primitives** (leaf nodes that do work) and **composites** (containers that orchestrate other statements).
 
-For full workflowspec context, see the [Workflowspec Reference](./workflowspec.md).
+For full workflowspec context, see the [Workflowspec Reference](./workflowspec-reference.md). For
+the activities an `activity` statement can invoke, see the
+[Activity Catalog](./activity-catalog.md).
 
 ## Common Parameters
 
@@ -72,7 +74,7 @@ Executes a registered activity (HTTP call, database query, custom function, etc.
 
 ```yaml
 - activity:
-    type: builtin.http_request
+    type: http.request
     input_data:
       method: POST
       url: https://api.example.com/orders
@@ -96,7 +98,8 @@ Executes a registered activity (HTTP call, database query, custom function, etc.
 | `enable_cache` | Enable result caching |
 | `cache_policy` | Cache configuration (TTL, key) |
 
-Built-in activities: `builtin.delay`, `builtin.now`, `builtin.execute_workflow`.
+Every available activity type, with its input and output contract, is in the
+[Activity Catalog](./activity-catalog.md).
 
 Some activities already default to local execution, so `execute_locally` is rarely needed. Setting
 it to `false` on a `selenium.*` or `playwright.*` activity breaks browser sessions — see
@@ -151,7 +154,7 @@ To define a workflow inline instead of by name:
 
 ### call
 
-Invokes a [function](./workflowspec.md#functions) defined in the enclosing wfspec's
+Invokes a [function](./workflowspec-reference.md#functions) defined in the enclosing wfspec's
 `functions` list. A `call` is a compact shorthand for a `workflow` statement running in
 `inline` mode: the function executes in a fresh context and its return value is mapped back
 via `output_name` / `output_data`.
@@ -204,7 +207,7 @@ Waits for an event matching filter criteria, or until a timeout.
 
 To collect the result of an activity started with `async_mode: true`, pass the token that
 activity returned as `event.event_type` — see
-[Async activity results](./events.md#async-activity-results).
+[Async activity results](../concepts/events.md#async-activity-results).
 
 ---
 
@@ -338,6 +341,19 @@ transitions:
 `resumed_from_state` is set only when the machine actually jumped, so under `auto_resume: false`
 it is null while `checkpointed_from_state` names the state. Both are null on a first run.
 
+Two more keys sit alongside them, available in any state `on_enter`/`on_exit` and any transition
+`action`/`condition` while the machine runs:
+
+| Key | Description |
+|---|---|
+| `name` | The machine's `name`, or `unnamed_state_machine` if the spec omits it |
+| `current_state` | The state the machine is in right now |
+
+`current_state` is updated before a state's `on_enter` runs, so a state always sees itself rather
+than the one it just left. During a transition's `action` it is still the source state. The whole
+`state_machine` key is removed once the machine completes, and a nested machine shadows it and
+restores the outer values on exit.
+
 ---
 
 ## Composite Statements
@@ -353,7 +369,7 @@ sequence:
         output_data:
           - status: "validating"
     - activity:
-        type: builtin.http_request
+        type: http.request
         input_data:
           url: https://api.example.com/validate
         output_name: validation
@@ -375,13 +391,13 @@ Executes statements concurrently with configurable join semantics.
     elements:
       - activity:
           name: fetch-user
-          type: builtin.http_request
+          type: http.request
           input_data:
             url: https://api.example.com/users/{{ user_id }}
           output_name: user_data
       - activity:
           name: fetch-orders
-          type: builtin.http_request
+          type: http.request
           input_data:
             url: https://api.example.com/orders?user={{ user_id }}
           output_name: order_data
@@ -426,7 +442,7 @@ Use `abort` with `type: break_iteration` to exit the loop early.
 
 ### state_machine
 
-Event-driven finite state machine. See [State Machines Reference](./state-machines.md) for full documentation.
+Event-driven finite state machine. See [State Machines Reference](../concepts/state-machines.md) for full documentation.
 
 ```yaml
 - state_machine:
@@ -446,12 +462,12 @@ Event-driven finite state machine. See [State Machines Reference](./state-machin
 ```
 
 `trigger.event_type` accepts an expression, resolved against the workflow context on every
-incoming event — see [expression triggers](./state-machines.md#expression-triggers).
+incoming event — see [expression triggers](../concepts/state-machines.md#expression-triggers).
 
 ---
 
 ## Next Steps
 
-- [State Machines Reference](./state-machines.md) — detailed FSM documentation
-- [Events Reference](./events.md) — event-driven workflow patterns
-- [Workflowspec Reference](./workflowspec.md) — full technical reference including expressions, conditions, and complete examples
+- [State Machines Reference](../concepts/state-machines.md) — detailed FSM documentation
+- [Events Reference](../concepts/events.md) — event-driven workflow patterns
+- [Workflowspec Reference](./workflowspec-reference.md) — full technical reference including expressions, conditions, and complete examples

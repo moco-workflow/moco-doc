@@ -404,5 +404,5 @@ result: "{{ sum([item['price'] * item['qty'] * (1 - item.get('discount', 0)) for
 ## Next Steps
 
 - [Activities](./activities.md) - Learn about activity system
-- [Workflowspec Reference](../reference/workflowspec.md) - Complete reference
+- [Workflowspec Reference](../reference/workflowspec-reference.md) - Complete reference
 - [Writing Workflows](../guides/writing-workflows.md) - Best practices
