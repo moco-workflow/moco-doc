@@ -39,7 +39,7 @@ A field ending `_secret_key` holds the **name of a secret**, never the secret it
 enters workflow context. A bare `NAME` resolves a user-scoped secret; `global/NAME` resolves a
 global one. See [Secret Activities](./activities/secret.md).
 
-Three exceptions are worth knowing:
+Four exceptions are worth knowing:
 
 - [`http.request`](./activities/http.md#authentication) takes `encrypted_auth_token` — the still-encrypted
   blob from `builtin.secret.get` — rather than a secret name.
@@ -48,6 +48,9 @@ Three exceptions are worth knowing:
   through workflow context in plaintext.
 - [`langfuse.*`](./activities/langfuse.md) takes raw credentials inline; prefer configuring them as
   environment variables on the worker.
+- [`k8s.*`](./activities/k8s.md#setup) names its token and client key through `token_secret_key` and
+  `client_key_secret_key` as usual, but also accepts an inline `ca_cert` — a CA certificate is public
+  material, so routing it through the secret store buys nothing.
 
 ### Retry and timeout defaults
 
@@ -81,6 +84,10 @@ parallel branch, or they block the workflow for their whole timeout, which is us
 workflow signal and a history entry**, and the engine retains at most 1000 unmatched events per
 topic — so these suit low-rate control streams, not high-throughput data feeds.
 
+[`k8s.wait`](./activities/k8s.md#k8swait) also runs long and heartbeats, but is not part of this
+pattern: it polls until its condition holds and then returns normally, rather than relaying events.
+Its result is the point, so it blocks by design.
+
 ### Where activities run
 
 Every activity runs on the `base` worker (task queue `default`) except
@@ -108,6 +115,7 @@ browser session to one worker — and must not be overridden.
 | [SQL](./activities/sql.md) | 2 | Parameterized queries and writes against PostgreSQL |
 | [Email](./activities/email.md) | 1 | Sending mail over SMTP |
 | [Google Drive](./activities/gdrive.md) | 6 | Reading and writing Drive files |
+| [Kubernetes](./activities/k8s.md) | 8 | Applying, inspecting and operating cluster resources |
 | [Kafka](./activities/kafka.md) | 2 | Publishing to and consuming from Kafka |
 | [RabbitMQ](./activities/rabbit.md) | 2 | Publishing to and subscribing to RabbitMQ |
 | [GraphQL](./activities/graphql.md) | 1 | GraphQL subscriptions |
@@ -183,6 +191,19 @@ browser session to one worker — and must not be overridden.
 | [`gdrive.get_metadata`](./activities/gdrive.md#gdriveget_metadata) | Read one file's metadata |
 | [`gdrive.create_folder`](./activities/gdrive.md#gdrivecreate_folder) | Create a folder, optionally reusing an existing one |
 | [`gdrive.delete`](./activities/gdrive.md#gdrivedelete) | Trash or permanently delete a file |
+
+### Kubernetes
+
+| Activity | Description |
+| --- | --- |
+| [`k8s.apply`](./activities/k8s.md#k8sapply) | Server-side apply one or more manifests |
+| [`k8s.get`](./activities/k8s.md#k8sget) | Fetch a single resource |
+| [`k8s.list`](./activities/k8s.md#k8slist) | List resources by label or field selector |
+| [`k8s.delete`](./activities/k8s.md#k8sdelete) | Delete a resource, or a set of them |
+| [`k8s.scale`](./activities/k8s.md#k8sscale) | Set a workload's replica count |
+| [`k8s.logs`](./activities/k8s.md#k8slogs) | Read a bounded tail of a pod's log |
+| [`k8s.wait`](./activities/k8s.md#k8swait) | Poll until a condition holds, or the resource is gone |
+| [`k8s.exec`](./activities/k8s.md#k8sexec) | Run a command in a container |
 
 ### Messaging and streaming
 

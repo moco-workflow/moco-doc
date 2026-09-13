@@ -56,6 +56,7 @@ const sidebars: SidebarsConfig = {
             'reference/activities/llama-index',
             'reference/activities/langfuse',
             'reference/activities/gdrive',
+            'reference/activities/k8s',
             'reference/activities/kafka',
             'reference/activities/rabbit',
             'reference/activities/graphql',

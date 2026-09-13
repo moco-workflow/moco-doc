@@ -62,9 +62,9 @@ Activities allow you to:
 
 ## Built-in Activities
 
-Moco ships 174 activities across 19 providers — HTTP, shell, SQL, email, Kafka, RabbitMQ, Google
-Drive, browser automation, LLM and RAG activities, and the platform's own state, secret and
-deployment activities. The [Activity Catalog](../reference/activity-catalog.md) indexes every one
+Moco ships 182 activities across 20 providers — HTTP, shell, SQL, email, Kafka, RabbitMQ, Google
+Drive, Kubernetes, browser automation, LLM and RAG activities, and the platform's own state,
+secret and deployment activities. The [Activity Catalog](../reference/activity-catalog.md) indexes every one
 of them, and each provider has a reference page giving the input and output contract of its
 activities with worked examples.
 
