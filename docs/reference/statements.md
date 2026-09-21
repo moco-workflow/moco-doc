@@ -306,7 +306,7 @@ Use it when an earlier state has a side effect the new execution needs again —
 straight into the state that consumed their events leaves the machine with no producer.
 
 The record is still written, so the state the checkpoint fired in stays readable as
-`__sys_info__.state_machine.checkpointed_from_state`. An `init` state can use it to re-run its
+`__sys_info__.get("state_machine",{}).get("checkpointed_from_state")`. An `init` state can use it to re-run its
 side effect and then route straight back, skipping one-time setup:
 
 ```yaml
@@ -466,8 +466,54 @@ incoming event — see [expression triggers](../concepts/state-machines.md#expre
 
 ---
 
+### rules_engine
+
+Declarative rule evaluation over a working memory of facts. See
+[Rules Engine](../concepts/rules-engine.md) for full documentation.
+
+```yaml
+- rules_engine:
+    name: loan-classification
+    input_data:
+      facts:
+        credit_score: "{{ credit_score }}"
+      run_mode: forward         # or: backward
+      terminate_facts: [decision]
+    rules:
+      - id: credit_tier_excellent
+        if:
+          with_facts: [credit_score]
+          expression: "{{ credit_score >= 750 }}"
+        then:
+          set_facts:
+            - credit_tier: excellent
+          actions:
+            - emit_event:
+                input_data:
+                  topic: loan_events
+                  event_type: tier_assigned
+    output_name: derived_facts
+```
+
+| Parameter | Description |
+|-----------|-------------|
+| `rules` | List of rules, each with `id`, `if` (`with_facts` + `expression`), and `then` (`set_facts` and/or `actions`) |
+| `input_data.facts` | Initial facts. In `backward` mode, a goal fact is given the value `null` |
+| `input_data.run_mode` | `forward` (default, data-driven) or `backward` (goal-driven) |
+| `input_data.fact_resolvers` | Map of fact name to a statement that produces it on demand |
+| `input_data.terminate_facts` | Stop once all of these facts have been derived |
+| `input_data.keep_alive` | Run as a continuous session fed by events. See [live mode](../concepts/rules-engine.md#live-mode-continuous-evaluation) |
+| `input_data.fact_source_topic` | Topic carrying `set_facts` events in live mode (default: `default`) |
+| `input_data.timeout_sec` | Wall-clock limit for a live session; supports expressions |
+| `input_data.max_iterations` | Safety limit on evaluation cycles in live mode (default: 1000) |
+| `output_name` / `output_data` | Receives the **derived** facts — those asserted by rules, not the seeded ones |
+| `condition` | Pre-condition; the whole block is skipped when false |
+
+---
+
 ## Next Steps
 
 - [State Machines Reference](../concepts/state-machines.md) — detailed FSM documentation
+- [Rules Engine](../concepts/rules-engine.md) — declarative rule evaluation
 - [Events Reference](../concepts/events.md) — event-driven workflow patterns
 - [Workflowspec Reference](./workflowspec-reference.md) — full technical reference including expressions, conditions, and complete examples

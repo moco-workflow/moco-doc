@@ -4,10 +4,46 @@ import type * as Preset from '@docusaurus/preset-classic';
 
 // This runs in Node.js - Don't use client-side code here (browser APIs, JSX...)
 
+/**
+ * The sibling Moco apps. All of them are served from this same host root by the
+ * shared nginx (see `moco-nginx/conf.d/locations.conf`), so navigating to one is
+ * an ordinary same-tab link — keep this set and its labels in step with the
+ * switchers in moco-home, moco-ui and moco-apps/*.
+ *
+ * None of these are Docusaurus routes, which is why each needs three opt-outs:
+ * `pathname://` keeps the link out of the client-side router, `autoAddBaseUrl`
+ * keeps `/docs/` off the front of the path, and `target: '_self'` overrides the
+ * `_blank` Docusaurus adds to anything it reads as external.
+ */
+const SIBLING_APPS = [
+  {label: 'Home', path: '/'},
+  {label: 'Playground', path: '/apps/playground'},
+  {label: 'Agent', path: '/apps/moco-agent'},
+  {label: 'Console', path: '/ui'},
+];
+
+const siblingAppLink = ({label, path}: {label: string; path: string}) => ({
+  label,
+  href: `pathname://${path}`,
+  target: '_self',
+  autoAddBaseUrl: false,
+  // Hides the external-link glyph: these stay on the site, in this tab.
+  className: 'sibling-app-link',
+});
+
+const siteNavbarItems = SIBLING_APPS.map((app) => ({
+  ...siblingAppLink(app),
+  position: 'right' as const,
+}));
+
+const siteFooterLinks = SIBLING_APPS.map(siblingAppLink);
+
 const config: Config = {
   title: 'Moco Workflow Platform',
   tagline: 'YAML-based declarative workflow orchestration with dual runtime support',
-  favicon: 'img/favicon.ico',
+  // The same mark the console serves at /moco-mark.svg, so the tab icon does not
+  // change as you move between the apps.
+  favicon: 'img/moco-mark.svg',
 
   // Set the production url of your site here
   url: 'https://www.my-moco.com',
@@ -21,7 +57,11 @@ const config: Config = {
   projectName: 'moco', // Usually your repo name.
 
   onBrokenLinks: 'warn',
-  onBrokenMarkdownLinks: 'warn',
+  markdown: {
+    hooks: {
+      onBrokenMarkdownLinks: 'warn',
+    },
+  },
 
   // Even if you don't use internationalization, you can use this field to set
   // useful metadata like html lang. For example, if your site is Chinese, you
@@ -30,6 +70,13 @@ const config: Config = {
     defaultLocale: 'en',
     locales: ['en'],
   },
+
+  // Inter and JetBrains Mono are what the console and the apps set in their
+  // Tailwind config; loading them here is what keeps the type identical rather
+  // than merely similar. moco-home pulls the same two families.
+  stylesheets: [
+    'https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap',
+  ],
 
   presets: [
     [
@@ -40,23 +87,11 @@ const config: Config = {
           sidebarPath: './sidebars.ts',
           editUrl:
             'https://github.com/moco-workflow/moco/tree/main/moco-doc/',
-          exclude: ['**/temp/**'],
+          // `*.draft.md` files hold working notes for a doc that is not finished yet;
+          // they must not ship as pages on the user-facing site.
+          exclude: ['**/temp/**', '**/*.draft.md'],
         },
-        blog: {
-          showReadingTime: true,
-          feedOptions: {
-            type: ['rss', 'atom'],
-            xslt: true,
-          },
-          // Please change this to your repo.
-          // Remove this to remove the "edit this page" links.
-          editUrl:
-            'https://github.com/moco-workflow/moco/tree/main/moco-doc/',
-          // Useful options to enforce blogging best practices
-          onInlineTags: 'warn',
-          onInlineAuthors: 'warn',
-          onUntruncatedBlogPosts: 'warn',
-        },
+        blog: false,
         theme: {
           customCss: './src/css/custom.css',
         },
@@ -65,22 +100,16 @@ const config: Config = {
   ],
 
   themeConfig: {
-    // Replace with your project's social card
-    image: 'img/docusaurus-social-card.jpg',
     navbar: {
-      title: 'Moco',
+      title: 'Moco Docs',
       logo: {
-        alt: 'Moco Logo',
-        src: 'img/logo.svg',
+        alt: 'Moco',
+        src: 'img/moco-mark.svg',
       },
+      // No docSidebar item: it pointed at the same place the logo does now that
+      // the overview is the docs root, and the sidebar is always on screen.
       items: [
-        {
-          type: 'docSidebar',
-          sidebarId: 'tutorialSidebar',
-          position: 'left',
-          label: 'Documentation',
-        },
-        {to: '/blog', label: 'Blog', position: 'left'},
+        ...siteNavbarItems,
         {
           href: 'https://github.com/moco-workflow/moco',
           label: 'GitHub',
@@ -95,14 +124,22 @@ const config: Config = {
           title: 'Docs',
           items: [
             {
-              label: 'Getting Started',
-              to: '/docs/intro',
+              label: 'Overview',
+              to: '/docs/',
+            },
+            {
+              label: 'Quick Start',
+              to: '/docs/quick-start',
             },
             {
               label: 'Workflowspec Reference',
               to: '/docs/reference/workflowspec-reference',
             },
           ],
+        },
+        {
+          title: 'Platform',
+          items: siteFooterLinks,
         },
         {
           title: 'Community',
@@ -113,21 +150,19 @@ const config: Config = {
             },
           ],
         },
-        {
-          title: 'More',
-          items: [
-            {
-              label: 'Blog',
-              to: '/blog',
-            },
-          ],
-        },
       ],
       copyright: `Copyright © ${new Date().getFullYear()} Moco Workflow Platform. Built with Docusaurus.`,
     },
+    colorMode: {
+      // The console follows the OS by default; the docs should not be the one
+      // app that forces light on someone running everything else dark.
+      respectPrefersColorScheme: true,
+    },
     prism: {
-      theme: prismThemes.github,
-      darkTheme: prismThemes.dracula,
+      theme: prismThemes.oneLight,
+      // Dracula's magenta/green sits badly next to the indigo brand; oneDark is
+      // closer to the Monaco palette the playground renders specs in.
+      darkTheme: prismThemes.oneDark,
       additionalLanguages: ['python', 'bash', 'yaml', 'json'],
     },
   } satisfies Preset.ThemeConfig,

@@ -59,6 +59,10 @@ Activities allow you to:
 | `execute_locally` | boolean | Force local execution (bypass Temporal). Overrides the activity's own default — see [Local Execution](#local-execution) |
 | `enable_cache` | boolean | Enable result caching |
 | `cache_policy` | dict | Cache configuration |
+| `async_mode` | boolean | Start the activity and continue without waiting — see [`async_mode`](#fire-and-forget-async_mode) |
+| `async_event_topic` | string | Topic the completion event is published to when `async_mode` is set (default: `default`) |
+| `name` | string | Names the step. Required to mock it in a [test](../guides/testing.md#mocking) |
+| `condition` | expression | Skip the activity when this is falsy |
 
 ## Built-in Activities
 
@@ -200,14 +204,15 @@ Evaluated once at workflow start. Use for:
 
 ```yaml
 - activity:
-    type: custom.data_processor
+    type: sql.query
     config_data:
-      endpoint: https://processor.example.com
-      api_key: "{{ env.API_KEY }}"
-      timeout: 60
+      connection_string_secret_key: ANALYTICS_DB      # same every run
     input_data:
-      data: "{{ batch_data }}"
+      query: "SELECT * FROM orders WHERE id = {{ order_id }}"
 ```
+
+Note what is *not* in `config_data`: the connection string itself. Credentials are referenced by
+secret key and resolved inside the activity — see [Secret Management](#secret-management).
 
 ### input_data (Dynamic)
 
@@ -362,71 +367,61 @@ The transformed data is stored in `result`:
 }
 ```
 
-## Custom Activities
+## Fire-and-forget: `async_mode`
 
-Create custom activities for your specific needs:
-
-### 1. Define Activity Provider
-
-```python
-from moco.core.workflow.activity.activity_types import IActivityProvider
-
-class EmailActivityProvider(IActivityProvider):
-    async def execute(
-        self,
-        config_data: dict,
-        input_data: dict,
-        context: dict
-    ) -> dict:
-        # Send email
-        to = input_data['to']
-        subject = input_data['subject']
-        body = input_data['body']
-
-        # ... email sending logic ...
-
-        return {
-            'sent': True,
-            'message_id': 'msg-12345'
-        }
-
-    def get_manifest(self) -> dict:
-        return {
-            'type': 'myorg.send_email',
-            'version': '1.0.0',
-            'description': 'Send email via SMTP',
-            'input_schema': {
-                'to': {'type': 'string', 'required': True},
-                'subject': {'type': 'string', 'required': True},
-                'body': {'type': 'string', 'required': True},
-            }
-        }
-```
-
-### 2. Register Activity
-
-```python
-from moco.core.workflow.activity.activity_directory import ActivityDirectory
-
-activity_dir = ActivityDirectory()
-activity_dir.register_provider('myorg.send_email', EmailActivityProvider())
-```
-
-### 3. Use in Workflow
+By default a workflow waits for each activity to finish. Set `async_mode: true` and it starts the
+activity and moves on:
 
 ```yaml
 - activity:
-    type: myorg.send_email
-    version: 1.0.0
-    config_data:
-      smtp_host: smtp.example.com
-      smtp_port: 587
+    name: slow_report
+    type: shell.run
+    async_mode: true
     input_data:
-      to: "{{ customer.email }}"
-      subject: "Order Confirmation #{{ order_id }}"
-      body: "{{ email_template }}"
-    output_name: email_result
+      command: ./build-report.sh
+    output_name: report_token
 ```
+
+The activity's "output" is immediately a **token** string, not the result. Later — possibly much
+later, possibly in a different branch — you collect the real result by waiting for an event whose
+type is that token:
+
+```yaml
+- wait_for:
+    event:
+      event_type: "{{ report_token }}"
+    output_name: report
+```
+
+The token is unique per invocation, so the same activity running in a loop or a re-entered state
+never collides with itself. Event metadata carries `status` (`completed` or `failed`), `error`, and
+the activity name and run ID.
+
+Point `async_event_topic` at a state machine's `event_source_topic` and the activity's completion
+drives a transition directly — the usual way to let slow work advance an event-driven workflow.
+
+Waiting is optional: ignoring the token is plain fire-and-forget. Two caveats, though. A completion
+event is consumed by the first matching waiter, and in-flight completions do not survive a
+`continue_as_new_checkpoint`. And an activity still running when the workflow completes is
+cancelled — for work that must outlive the workflow, use a detached child workflow instead.
+
+## What if no built-in activity fits?
+
+The [Activity Catalog](../reference/activity-catalog.md) covers most integration needs, and it is
+worth checking before concluding it does not. In particular:
+
+- `http.request` and `graphql.query` reach any HTTP or GraphQL service
+- `shell.run` runs a command on the worker
+- `sql.query` talks to any database with a connection string
+- `mcp.*` calls tools on an MCP server
+
+Between them, most "I need a custom activity" cases turn out to be an HTTP call. Wrapping that call
+in a child workflow gives you a named, versioned, reusable unit that other workflows can compose —
+usually a better answer than new platform code, because you can release it yourself.
+
+When you genuinely need a new activity type in the platform — a new protocol, a native SDK, or
+something that must run inside a worker — that is a change to Moco itself, not to a workflow. It is
+documented for platform developers in `moco-core/docs/creating-activity-providers.md`.
 
 ## Activity Best Practices
 
@@ -450,43 +445,52 @@ activity_dir.register_provider('myorg.send_email', EmailActivityProvider())
     message: "API call failed: {{ result.error }}"
 ```
 
-### Idempotency
+### Assume Activities Can Run Twice
 
-Design activities to be idempotent (safe to retry):
+With `max_attempts` above 1, a retried activity runs again — and a transient failure can happen
+*after* the work succeeded but before the result got back. Prefer operations that tolerate that:
 
-```python
-async def execute(self, config_data, input_data, context):
-    # Check if already processed
-    order_id = input_data['order_id']
-    if await self.is_processed(order_id):
-        return await self.get_previous_result(order_id)
+```yaml
+# Safer: PUT is idempotent, the same call twice leaves the same state
+- activity:
+    type: http.request
+    input_data:
+      method: PUT
+      url: "https://api.example.com/orders/{{ order_id }}"
+      json_data: "{{ order }}"
+    retry_policy:
+      max_attempts: 3
 
-    # Process order
-    result = await self.process_order(order_id)
-
-    # Store result
-    await self.save_result(order_id, result)
-
-    return result
+# Riskier: POST may create two orders. Send an idempotency key, or set max_attempts: 1
+- activity:
+    type: http.request
+    input_data:
+      method: POST
+      url: https://api.example.com/orders
+      headers:
+        Idempotency-Key: "{{ order_id }}"
+      json_data: "{{ order }}"
+    retry_policy:
+      max_attempts: 3
 ```
 
 ### Use config_data for Static Values
 
 ```yaml
-# Good: Static values in config_data
+# Good: what never varies goes in config_data
 - activity:
+    type: http.request
     config_data:
-      api_base: https://api.example.com
-      api_key: "{{ env.API_KEY }}"
+      base_url: https://api.example.com
     input_data:
-      user_id: "{{ user_id }}"  # Dynamic per execution
+      path: "/users/{{ user_id }}"   # varies per execution
 
-# Bad: Everything in input_data
+# Bad: everything in input_data, re-evaluated every call
 - activity:
+    type: http.request
     input_data:
-      api_base: https://api.example.com  # Same every time
-      api_key: "{{ env.API_KEY }}"      # Same every time
-      user_id: "{{ user_id }}"
+      base_url: https://api.example.com   # same every time
+      path: "/users/{{ user_id }}"
 ```
 
 ### Appropriate Timeouts
@@ -512,6 +516,6 @@ async def execute(self, config_data, input_data, context):
 ## Next Steps
 
 - [Activity Catalog](../reference/activity-catalog.md) — every activity, by provider
+- [Statements Reference](../reference/statements.md) — the `activity` statement's full field list
 - [State Machines Reference](./state-machines.md)
 - [Events Reference](./events.md)
-- [Creating Custom Activities Guide](../guides/creating-activities.md)

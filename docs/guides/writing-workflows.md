@@ -5,7 +5,7 @@ sidebar_position: 2
 
 # Writing Workflows
 
-This guide covers practical patterns for authoring Moco workflow specs. It assumes you have the environment set up — if not, see [Development Setup](./development-setup.md).
+This guide covers practical patterns for authoring Moco workflow specs. It assumes you have the CLI installed and can run a workflow — if not, start with the [Quick Start](../quick-start.md).
 
 ---
 
@@ -363,7 +363,8 @@ body:
 
 ## Next Steps
 
-- [Creating Custom Activities](./creating-activities.md) — extend Moco with your own activity types
-- [Testing Workflows](./testing.md) — unit and integration testing patterns
+- [Testing Workflows](./testing.md) — writing `*.test.yaml` suites for what you just built
+- [Activities](../concepts/activities.md) — retries, caching, secrets, and `async_mode`
 - [Statements Reference](../reference/statements.md) — complete statement syntax
 - [Workflowspec Reference](../reference/workflowspec-reference.md) — expressions, conditions, variable modifiers, and more
+- [Using the Moco CLI](./use-moco-cli.md) — publish and share the workflow

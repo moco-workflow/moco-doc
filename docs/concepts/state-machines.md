@@ -3,7 +3,7 @@ sidebar_label: State Machines
 sidebar_position: 3
 ---
 
-# State Machines Reference
+# State Machines
 
 The `state_machine` statement implements an event-driven finite state machine (FSM) inside a workflow. Use it when your workflow needs to wait for external events and transition between named states based on those events.
 
@@ -80,7 +80,7 @@ states:
         elements:
           - transform:
               output_data:
-                - entered_at: "{{ __sys_info__.timestamp }}"
+                - entered_at: "{{ now() }}"
           - activity:
               type: process-order
               input_data:
@@ -94,7 +94,7 @@ states:
     on_exit:
       transform:
         output_data:
-          - exited_at: "{{ __sys_info__.timestamp }}"
+          - exited_at: "{{ now() }}"
 ```
 
 The `on_enter` callback typically does the work for a state and then emits an event to trigger the next transition.
@@ -349,7 +349,7 @@ body:
                 transform:
                   output_data:
                     - status: completed
-                    - completed_at: "{{ __sys_info__.timestamp }}"
+                    - completed_at: "{{ now() }}"
 
             - name: failed
               is_terminal: true

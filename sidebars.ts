@@ -27,6 +27,12 @@ const sidebars: SidebarsConfig = {
         'concepts/workflowspec',
         'concepts/expressions',
         'concepts/activities',
+        'concepts/rules-engine',
+        'concepts/state-machines',
+        'concepts/events',
+        'concepts/child-workflows',
+        'concepts/how-to-run-workflow',
+        'concepts/release-and-sharing',
       ],
     },
     {
@@ -35,8 +41,6 @@ const sidebars: SidebarsConfig = {
       items: [
         'reference/workflowspec-reference',
         'reference/statements',
-        'concepts/state-machines',
-        'concepts/events',
         {
           type: 'category',
           label: 'Activity Catalog',
@@ -74,10 +78,11 @@ const sidebars: SidebarsConfig = {
       type: 'category',
       label: 'Guides',
       items: [
-        'guides/development-setup',
+        'guides/use-moco-cli',
         'guides/writing-workflows',
-        'guides/creating-activities',
         'guides/testing',
+        'guides/run-moco-workflow-through-api',
+        'guides/kubernetes-deployment',
       ],
     },
   ],

@@ -3,7 +3,7 @@ sidebar_label: Events
 sidebar_position: 4
 ---
 
-# Events Reference
+# Events
 
 Moco supports event-driven workflows through two complementary statements: `emit_event` (send) and `wait_for` (receive). Events enable coordination between concurrent workflows, signal state machine transitions, and implement multi-agent patterns.
 
@@ -22,7 +22,7 @@ Sends an event to the event bus.
       data:
         type: order_created
         order_id: "{{ order_id }}"
-        timestamp: "{{ __sys_info__.timestamp }}"
+        timestamp: "{{ now() }}"
 ```
 
 ### Parameters
@@ -329,7 +329,7 @@ body:
                       workflow_id: "child-{{ iter_item.agent_id }}"
                     input_data:
                       config: "{{ iter_item }}"
-                      parent_workflow_id: "{{ __sys_info__.workflow_id }}"
+                      parent_workflow_id: "{{ __sys_info__['workflow_id'] }}"
                     output_name: child_info
                 - transform:
                     output_data:

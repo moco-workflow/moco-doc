@@ -1,345 +1,140 @@
 ---
+sidebar_label: Runtimes
 sidebar_position: 2
 ---
 
-# Dual Runtime Architecture
+# Runtimes
 
-One of Moco's most powerful features is its dual runtime support. The same workflow definition can run on two completely different execution engines without any code changes.
+The same wfspec runs on two different engines. You do not choose between them when you write the
+workflow — you choose when you run it, and the workflow does not change.
 
-## Why Dual Runtime?
+| | In-memory runtime | Temporal runtime |
+|---|---|---|
+| Where it runs | In one process | Across distributed workers |
+| Durability | None | Full — state survives crashes and restarts |
+| Retries and timeouts | `retry_policy` ignored | Honored |
+| `start` / `cancel` / `status` | Not available | Available |
+| Waiting for events or long timers | Holds the process open | Free — the workflow is not resident |
+| Latency | Lowest | Higher, per step |
+| Infrastructure | None | Temporal server and workers |
 
-Different stages of the development lifecycle have different requirements:
+This is what lets you iterate quickly and still deploy something durable. Run your workflow
+in-memory while you are writing it, and run it on Temporal when it matters.
 
-- **Development & Testing**: Fast iteration, easy debugging, minimal setup
-- **Production**: Durability, scalability, fault tolerance, observability
+---
 
-Moco's dual runtime allows you to:
-1. Develop and test quickly with the in-memory runtime
-2. Deploy confidently to production with Temporal.io
-3. Use the same workflow definitions in both environments
+## Choosing a runtime
 
-## In-Memory Runtime
-
-The in-memory runtime is optimized for development and testing.
-
-### Characteristics
-
-- **Synchronous execution**: Workflows run in the calling process
-- **No external dependencies**: No need for Temporal server, databases, etc.
-- **Fast**: Minimal overhead, instant startup
-- **Deterministic**: Perfect for unit testing
-- **Limited durability**: State is lost if process crashes
-
-### When to Use
-
-- Local development
-- Unit and integration tests
-- CI/CD pipeline tests
-- Quick prototyping
-- Simple automation scripts
-
-### Example Usage
-
-```python
-from moco.core.workflow.runtime.runtime_builder import RuntimeBuilder
-from moco.core.workflow.client.client import WorkflowClient
-
-# Build in-memory runtime
-runtime_builder = RuntimeBuilder()
-runtime = runtime_builder.build_in_memory_runtime()
-
-# Create client
-client = WorkflowClient(runtime)
-
-# Execute workflow
-result = await client.execute_workflow_from_yaml(
-    wfspec_yaml=workflow_yaml,
-    input_data={'param': 'value'}
-)
-```
-
-### Configuration
-
-No configuration needed! Just use `build_in_memory_runtime()`.
-
-## Temporal.io Runtime
-
-The Temporal.io runtime is designed for production workloads.
-
-### Characteristics
-
-- **Asynchronous execution**: Workflows run on distributed workers
-- **Durable**: Workflow state persisted to database
-- **Fault tolerant**: Automatic retries, workflow replay
-- **Scalable**: Horizontal scaling of workers
-- **Observable**: Complete execution history and monitoring
-- **Activity isolation**: Activities run separately from workflow logic
-
-### When to Use
-
-- Production deployments
-- Long-running workflows (days, weeks, months)
-- Mission-critical processes
-- Workflows requiring high availability
-- Complex distributed systems
-
-### Architecture
-
-```
-┌──────────────┐
-│   Client     │
-└──────┬───────┘
-       │ Start Workflow
-       ↓
-┌──────────────────┐     ┌──────────────────┐
-│ Temporal Server  │────→│   PostgreSQL     │
-│   (Orchestrator) │     │  (State Storage) │
-└────────┬─────────┘     └──────────────────┘
-         │
-         │ Task Queue
-         ↓
-┌──────────────────┐
-│  Workflow Worker │
-│  • Execute WF    │
-│  • Dispatch Acts │
-└────────┬─────────┘
-         │
-         ↓
-┌──────────────────┐
-│ Activity Worker  │
-│  • Execute Acts  │
-│  • Return Result │
-└──────────────────┘
-```
-
-### Example Usage
-
-```python
-from moco.core.workflow.runtime.runtime_builder import RuntimeBuilder
-from moco.core.workflow.client.client import WorkflowClient
-
-# Build Temporal runtime (uses environment variables)
-runtime_builder = RuntimeBuilder()
-runtime = runtime_builder.build_temporal_runtime()
-
-# Create client
-client = WorkflowClient(runtime)
-
-# Start workflow (non-blocking)
-workflow_handle = await client.start_workflow(
-    workflow_name='my-workflow',
-    workflow_version='1.0.0',
-    workflow_id='unique-id-123',
-    input_data={'param': 'value'}
-)
-
-# Wait for result (or query later)
-result = await workflow_handle.result()
-```
-
-### Configuration
-
-Set environment variables:
+From the CLI, `--in-memory` picks the in-memory runtime; without it you get Temporal:
 
 ```bash
-export MOCO_RUNTIME_TYPE=temporal
-export MOCO_TEMPORALIO_ENDPOINT=localhost:7234
-export MOCO_TEMPORALIO_NAMESPACE=moco
-export MOCO_TEMPORALIO_TASK_QUEUE=default
+moco run src/hello-moco.yaml --in-memory     # fast, no durability
+moco run src/hello-moco.yaml                 # durable, distributed
+moco test --in-memory                        # the usual choice for a mocked suite
 ```
 
-Or use `.env` file:
+Through the API, it is the `execute_mode` option:
 
-```env
-MOCO_RUNTIME_TYPE=temporal
-MOCO_TEMPORALIO_ENDPOINT=temporal.example.com:7233
-MOCO_TEMPORALIO_NAMESPACE=moco
-MOCO_TEMPORALIO_TASK_QUEUE=default
+```json
+{ "options": { "execute_mode": "in-memory" } }
 ```
 
-### Starting Infrastructure
+There is also a third dispatch mode, `standalone-activity`, which runs the whole wfspec as a single
+durable unit on Temporal. All three are compared in
+[How Workflows Run](./how-to-run-workflow.md#execute-modes).
 
-Use Docker Compose to run Temporal locally:
+---
 
-```bash
-docker compose -f docker-compose-env.yml up -d
-```
+## What the Temporal runtime gives you
 
-This starts:
-- Temporal server (UI at http://localhost:8234)
-- PostgreSQL (for Temporal state)
-- Kafka (for event bus)
-- RabbitMQ (for message queue)
+Moco runs on the open-source [Temporal](https://temporal.io) platform, but you never write Temporal
+code — the wfspec is the whole interface. What you get from it:
 
-### Running Workers
+**Durable execution.** Every activity's input and output is recorded. If the worker running your
+workflow dies, another one replays the record, rebuilds the state exactly, and continues from the
+last completed step. Your workflow contains no checkpointing logic because it does not need any.
 
-Temporal requires workers to execute workflows:
+**Free waiting.** A workflow blocked on `wait_for` or a long timer is not occupying a process. It
+can wait days for a human to click approve. On the in-memory runtime, the same wait ties up the
+caller for the duration.
 
-```bash
-# Start workflow/activity worker
-.venv/bin/python -m moco_worker.main
-```
+**Retries that mean something.** An activity that fails transiently is retried according to its
+`retry_policy`, with exponential backoff, without the workflow knowing. Only a final failure reaches
+your logic.
 
-Workers:
-1. Connect to Temporal server
-2. Poll task queues for work
-3. Execute workflow code
-4. Execute activities
-5. Report results back to Temporal
+**Scale and isolation.** Activities run on workers, separately from workflow orchestration, so you
+add throughput by adding workers. Some activity types run on dedicated workers — `claude_agent.*`
+has its own, so a long agent run cannot starve ordinary activity traffic.
 
-## Runtime Selection
+**A history you can inspect.** Every run has a complete event log, which is what `moco history`
+reads.
 
-Moco automatically selects the runtime based on environment:
+---
 
-```python
-# Automatic runtime selection
-runtime_builder = RuntimeBuilder()
-runtime = runtime_builder.build_runtime()  # Uses MOCO_RUNTIME_TYPE env var
-```
+## What the in-memory runtime gives up
 
-You can also explicitly select:
+Everything above. The wfspec is interpreted in a single process, and:
 
-```python
-# Explicit in-memory
-runtime = runtime_builder.build_in_memory_runtime()
+- Nothing is recorded, so nothing recovers. A crash loses the run.
+- `retry_policy` is ignored entirely — activities get one attempt.
+- There is no workflow ID to address, so `moco start`, `status`, `cancel`, `terminate`, and
+  `history` are unavailable. The API returns `400` rather than failing quietly.
+- Activities execute in-process rather than on workers.
 
-# Explicit Temporal
-runtime = runtime_builder.build_temporal_runtime()
-```
+None of that matters for a short, idempotent workflow whose caller will retry anyway — and for that
+shape, skipping the orchestration overhead is a real win. It is also why tests default to it.
 
-## Key Differences
+---
 
-| Feature | In-Memory | Temporal.io |
-|---------|-----------|-------------|
-| Execution Mode | Synchronous | Asynchronous |
-| State Persistence | None | Database |
-| Fault Tolerance | None | Automatic retry |
-| Scalability | Single process | Distributed workers |
-| Workflow History | No | Complete history |
-| Activity Isolation | Same process | Separate workers |
-| Setup Complexity | None | Requires infrastructure |
-| Performance | Very fast | Higher latency |
-| Use Case | Dev/Test | Production |
+## Writing runtime-agnostic workflows
 
-## Activity Execution
+Most wfspecs already are. The few things worth knowing:
 
-Activities behave differently in each runtime:
+**Push side effects into activities.** Orchestration logic — conditions, loops, transforms — is
+replayed when a workflow recovers. Anything that touches the outside world belongs in an activity,
+where its result is recorded once and reused on replay. Writing files or calling APIs from a
+`transform` expression is the way to get surprising behaviour after a worker restart.
 
-### In-Memory Runtime
-- Activities execute in the same process
-- No retry by default (unless specified)
-- Failures propagate immediately
-- Fast execution
+**Don't depend on wall-clock time in expressions.** Use `builtin.now` rather than reaching for the
+clock inside a transform, for the same reason: an activity's result is recorded, a re-evaluated
+expression is not.
 
-### Temporal Runtime
-- Activities execute on activity workers
-- Automatic retry with exponential backoff
-- Failures are tracked in workflow history
-- Configurable timeouts:
-  - `schedule_to_close_timeout`: Max time from schedule to completion
-  - `start_to_close_timeout`: Max time from start to completion
-  - `schedule_to_start_timeout`: Max time waiting in queue
+**Assume activities may run more than once.** With retries enabled, they will. Prefer idempotent
+operations — upserts over inserts, `PUT` over `POST`, or an idempotency key.
 
-## Local Activity Execution
+**Set `retry_policy` where it matters, and expect it to be ignored in-memory.** A test run that
+passes in-memory has not exercised your retry configuration.
 
-You can force activities to run locally (in workflow process) even with Temporal:
+---
+
+## Local activity execution
+
+Even on Temporal, an individual activity can run in the workflow's own process instead of being
+dispatched to a worker:
 
 ```yaml
 - activity:
-    type: builtin.simple_calculation
+    type: builtin.delay
     input_data:
-      value: "{{ x }}"
-    execute_locally: true  # Run in workflow process
-    output_name: result
+      duration: 1s
+    execute_locally: true
 ```
 
-Use for:
-- Very fast operations (< 1ms)
-- Operations that don't benefit from retries
-- Reducing worker overhead
+This is worth it when the work is shorter than the queue round trip would be. It is not free: a
+local activity blocks the workflow while it runs, and skips the dispatch machinery that would
+otherwise retry it.
 
-Some activities are local by default and need no `execute_locally` from you. Notably, every
-`selenium.*` and `playwright.*` activity is, so that a browser session stays on the same worker
-as the workflow that opened it — see
+Some activities already do this for you. Short built-ins like `builtin.now` and `builtin.delay` do
+it for speed. Every `selenium.*` and `playwright.*` activity does it for correctness — a browser
+session only exists in the process that opened it, so the whole session has to stay on one worker.
+Details, and the reason not to override it, are in
 [Activities that are already local by default](./activities.md#activities-that-are-already-local-by-default).
 
-## Testing with Both Runtimes
+---
 
-Write tests that work with both runtimes:
+## Next steps
 
-```python
-import pytest
-from moco.core.workflow.runtime.runtime_builder import RuntimeBuilder
-
-@pytest.mark.parametrize("runtime_type", ["in_memory", "temporal"])
-async def test_workflow(runtime_type):
-    runtime_builder = RuntimeBuilder()
-
-    if runtime_type == "in_memory":
-        runtime = runtime_builder.build_in_memory_runtime()
-    else:
-        runtime = runtime_builder.build_temporal_runtime()
-
-    client = WorkflowClient(runtime)
-    result = await client.execute_workflow_from_yaml(
-        wfspec_yaml=workflow_yaml,
-        input_data=test_input
-    )
-
-    assert result == expected_output
-```
-
-## Best Practices
-
-### Development
-1. Use in-memory runtime for fast iteration
-2. Write unit tests with in-memory runtime
-3. Test critical paths with Temporal runtime
-4. Keep workflow definitions runtime-agnostic
-
-### Production
-1. Always use Temporal runtime in production
-2. Configure appropriate timeouts for activities
-3. Use separate task queues for different workflow types
-4. Monitor workflow execution via Temporal UI
-5. Set up alerts for workflow failures
-
-### Workflow Design
-1. Keep workflows deterministic
-2. Don't use non-deterministic operations in workflow code
-3. Push side effects to activities
-4. Use activities for external I/O
-5. Keep workflow logic focused on orchestration
-
-## Migration Path
-
-Moving from development to production:
-
-1. **Develop**: Use in-memory runtime
-   ```bash
-   # No environment variables needed
-   .venv/bin/pytest
-   ```
-
-2. **Test**: Test with Temporal locally
-   ```bash
-   docker compose -f docker-compose-env.yml up -d
-   export MOCO_RUNTIME_TYPE=temporal
-   .venv/bin/python -m moco_worker.main &
-   .venv/bin/pytest -m integration
-   ```
-
-3. **Deploy**: Point to production Temporal
-   ```bash
-   export MOCO_RUNTIME_TYPE=temporal
-   export MOCO_TEMPORALIO_ENDPOINT=temporal.prod.example.com:7233
-   export MOCO_TEMPORALIO_NAMESPACE=production
-   ```
-
-No code changes required - just environment configuration!
-
-## Next Steps
-
-- [Workflowspec Structure](./workflowspec.md)
-- [Expression Syntax](./expressions.md)
-- [Development Setup](../guides/development-setup.md)
+- [How Workflows Run](./how-to-run-workflow.md) — the three execute modes and their options
+- [Activities](./activities.md) — retries, timeouts, caching, and local execution
+- [Testing Workflows](../guides/testing.md) — why suites run in-memory
+- [Deploying on Kubernetes](../guides/kubernetes-deployment.md) — running the Temporal side yourself

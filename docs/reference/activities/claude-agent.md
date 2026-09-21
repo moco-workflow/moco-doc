@@ -28,7 +28,7 @@ workflow omits it:
 | `MOCO_CLAUDE_AGENT_MAX_BUDGET_USD` | `max_budget_usd` |
 | `MOCO_CLAUDE_AGENT_MAX_TOOL_CALLS` | `max_tool_calls` |
 | `MOCO_CLAUDE_AGENT_WORK_DIR` | Root of each run's private workspace |
-| `MOCO_CLAUDE_AGENT_PLUGIN_ROOT` | Where installed plugins are discovered |
+| `MOCO_CLAUDE_AGENT_PLUGIN_ROOT` | `:`-separated search path of directories holding installed plugins |
 
 :::note This activity runs on the agent worker
 `claude_agent.query` is the only activity served by the `agent` worker type (task queue `agent`)
@@ -201,8 +201,8 @@ this activity restricted must actually deploy the policy — see [Authz Activiti
 
 A [Claude Agent plugin](https://code.claude.com/docs/en/plugins) bundles skills, commands,
 subagents and hooks. Plugins are baked into the worker image and discovered from
-`MOCO_CLAUDE_AGENT_PLUGIN_ROOT` — every immediate subdirectory of that root is one available
-plugin. A workflow selects among them **by name**; it can never supply a path.
+`MOCO_CLAUDE_AGENT_PLUGIN_ROOT` — every immediate subdirectory of every root on that search path
+is one available plugin. A workflow selects among them **by name**; it can never supply a path.
 
 ```yaml
 capabilities:
@@ -213,8 +213,32 @@ capabilities:
 ```
 
 The plugin's name is the `name` in its `.claude-plugin/plugin.json`, falling back to its directory
-name. Ask your operator which plugins are installed; naming one that is not produces an error
-listing what is available.
+name. Naming one that is not installed produces an error listing what is available.
+
+#### What ships by default
+
+The `moco-agent` image prepackages [moco-devkit](https://github.com/moco/moco/tree/main/moco-devkit)
+at `/moco/plugins`, so an agent can be pointed at Moco workflow authoring without any operator
+setup:
+
+| Plugin | Skills |
+| --- | --- |
+| `moco-workflow-dev` | `moco-planning-workflows`, `moco-developing-workflows`, `moco-validating-workflows`, `moco-testing-workflows`, `moco-executing-workflows` |
+| `moco-knowledge` | `moco-consulting-kb` |
+
+```yaml
+capabilities:
+  plugins:
+    - moco-workflow-dev
+  skills:
+    - moco-workflow-dev:moco-developing-workflows
+```
+
+Two caveats on `moco-knowledge`: its knowledge base is **read-only** in the worker, because its
+curation loop writes to `${CLAUDE_PLUGIN_DATA}`, which lives on the per-run workspace that is
+deleted when the run ends. And its `reconcile-examples-index.sh` needs a `moco-examples` checkout
+that is not in the image. Ask your operator whether they have added or removed plugins — the set
+above is the chart default, not a guarantee.
 
 Granting a skill implies the `Skill` tool, so you do not need to add it to `builtin_tools`.
 

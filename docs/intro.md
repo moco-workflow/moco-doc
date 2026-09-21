@@ -1,5 +1,6 @@
 ---
 sidebar_position: 1
+slug: /
 ---
 
 # Moco Overview
@@ -40,7 +41,7 @@ long-running and human-in-the-loop workflows practical.
 
 By default Moco runs on top of the open-source **Temporal.io** platform, so workflows execute in a
 distributed environment with a durability guarantee — but the complexity of distributed execution
-and state management is abstracted away from Moco developers.
+and state management is abstracted away from you as a workflow author.
 
 Unlike the common `checkpoint`-based approach to distributed state management (as used by
 LangGraph), which pushes explicit state-management logic into the workflow itself, Temporal captures

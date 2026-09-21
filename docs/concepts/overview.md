@@ -4,20 +4,24 @@ sidebar_position: 1
 
 # Core Concepts Overview
 
-Understanding Moco's core concepts will help you build powerful and efficient workflows.
+This page is the map. It introduces every concept you need to build a Moco workflow and links to the
+page that covers each one properly.
 
+Three ideas hold the platform together:
 
-* **DSL**
-A **Workflowspec** (or **wfspec**) is a YAML-based declarative specification that defines workflow logic in Moco. With Moco workflowspec, your workflow logic can be easily expressed using a mix of **imperative steps**, event driven **state machine**, or declarative **rules engine** in a very flexible and concise way. The Yaml-based DSL also allows embedding sandboxed Python expressiones (with Pandas) to support complex dynamic data transformation.
+**A workflow is a document.** A **workflowspec** (or **wfspec**) is a YAML file that expresses your
+logic as a mix of imperative steps, an event-driven state machine, and a declarative rules engine —
+with sandboxed Python expressions in `{{ }}` wherever a value needs to be computed. One language
+covers a wide range of workflows, and it stays readable by the people who own the process.
 
-* **Deployment**
-Moco's DSL approach decouples workflows from the runtime platform. Unlike other engineering-oriented workflow platforms that require heavy-lifting backend deployment for workflow changes, Moco is a business workflow platform that allows user-owned workflows to be deployed separately from the runtime platform. Moco users can deploy their workflows on demand through cli or web console. Moco supports flexible workflow versioning, permission control, and targetting so that workflows can easily shared and composed.
+**A workflow is released like data, not like software.** Because a wfspec is a document rather than
+code compiled into the runtime, you publish and deploy it yourself, on demand, through the CLI or
+the web console. Versioning, access control, and staged rollout are properties of the document, so
+workflows can be shared and composed without a backend deployment for every change.
 
-* **Durable Execution**
-Moco provides durable workflow execution out of the box, but the complexity of distributed execution and state management are abstracted away from moco developers.
-Moco achieved this by binding the generic DSL engine with the Open Source Temporalio platform, through a thin intergration layer on top of its activity dispatcher.
-Unlike the common `checkpoint`-based approach for distributed state management (like Langraph), which requires explicit state management logic in workflow, Temporalio's unqique way of capturing/restoring states through IO event history is systematic and provides an application agnostic way for state menagement.
-Alternatively, the DSL engine can also directly run in a desktop app or a micro service to form a light-weight in-process runtime without durability guarantee.
+**Durability is the platform's problem.** Workflows run durably on Temporal — surviving crashes,
+restarts, and multi-day waits — without you writing any state-management or checkpointing logic. The
+same wfspec also runs in-memory with no infrastructure at all when you want speed over durability.
 
 ## Workflowspec
 
@@ -48,11 +52,13 @@ Statements are the building blocks of workflows. They come in two categories:
 ### Primitive Statements
 Leaf nodes that perform specific actions:
 - **transform**: Data transformations and variable assignments
-- **abort**: Workflow termination (abort, terminate, break, raise)
-- **activity**: Execute external functions/services
-- **workflow**: Execute child workflows
-- **wait_for**: Wait for events or timeouts
-- **emit_event**: Send events to the event bus
+- **abort**: Stop the workflow (abort, terminate, break, raise)
+- **activity**: Execute an activity — the bridge to the outside world
+- **workflow**: Execute a child workflow
+- **call**: Invoke a reusable `function` defined in the same wfspec
+- **wait_for**: Wait for an event or a timeout
+- **emit_event**: Send an event to the event bus
+- **continue_as_new_checkpoint**: Restart a long-running workflow with a fresh history
 
 ### Composite Statements
 Containers that orchestrate other statements:
@@ -60,6 +66,7 @@ Containers that orchestrate other statements:
 - **parallel**: Execute statements concurrently
 - **iteration**: Loop over collections
 - **state_machine**: Event-driven finite state machines
+- **rules_engine**: Declarative rule evaluation over a working memory of facts
 
 ## Expressions
 
@@ -98,15 +105,11 @@ Activities are external functions or services that workflows can invoke:
     output_name: api_result
 ```
 
-Built-in activities include:
-- HTTP requests
-- Delays
-- Event emission
-- State persistence
-- Secret management
-- Workflow execution
-
-Custom activities can be registered via activity providers.
+Moco ships activities for HTTP and GraphQL, shell commands, SQL, email, Kafka and RabbitMQ, Google
+Drive, Kubernetes, browser automation, OpenAI and Claude agents, vector search, and the platform's
+own secret, state, and deployment operations. The
+[Activity Catalog](../reference/activity-catalog.md) lists every one with its input and output
+contract.
 
 ## Context and Variables
 
@@ -138,25 +141,15 @@ template#literal: "{{ not_evaluated }}"
 path#python_glom: "data.nested.field"
 ```
 
-## Runtime Modes
+## Runtimes and Execute Modes
 
-Moco supports two runtime modes:
+The same wfspec runs two ways: durably and distributed on **Temporal**, or entirely **in-memory**
+with no infrastructure. You pick per run, not per workflow — `moco run --in-memory`, or
+`execute_mode` through the API. A third mode, `standalone-activity`, runs the whole spec as one
+durable unit for data-heavy work.
 
-### In-Memory Runtime
-- Fast, synchronous execution
-- Perfect for development and testing
-- No external dependencies
-- Limited to single-process execution
-
-### Temporal.io Runtime
-- Production-grade distributed execution
-- Durable workflow state
-- Automatic retries and timeouts
-- Horizontal scaling
-- Workflow history and replay
-- Activity isolation
-
-Switch between modes using environment variables - no code changes needed!
+See [Runtimes](./dual-runtime.md) for the trade-offs and
+[How Workflows Run](./how-to-run-workflow.md) for the execute modes and their options.
 
 ## Events
 
@@ -190,12 +183,12 @@ Events enable:
 
 ## Child Workflows
 
-Workflows can execute other workflows with different execution modes:
+Workflows can execute other workflows, in one of four modes:
 
-- **nested**: Child shares parent's context
-- **sync**: Child runs independently, parent waits for result
-- **async**: Child runs independently, parent waits for start
-- **detached**: Child runs completely independently
+- **inline** (default): Runs in the parent's context, sharing its variables
+- **sync**: Runs independently; the parent waits for the result
+- **async**: Runs independently; the parent waits only for it to start, and gets a `workflow_id`
+- **detached**: Runs completely independently, and outlives the parent
 
 ```yaml
 - workflow:
@@ -235,11 +228,33 @@ State machines provide:
 - Entry/exit callbacks
 - Global transitions
 
-## Next Steps
+## Where to go next
 
-Dive deeper into specific topics:
+**Writing a workflow**
 
-- [Dual Runtime Architecture](./dual-runtime.md)
-- [Workflowspec Structure](./workflowspec.md)
-- [Expression Syntax](./expressions.md)
-- [Activity System](./activities.md)
+- [Workflowspec Structure](./workflowspec.md) — the anatomy of a spec
+- [Expressions](./expressions.md) — the `{{ }}` language and variable modifiers
+- [Activities](./activities.md) — calling the outside world
+- [Writing Workflows](../guides/writing-workflows.md) — practical authoring patterns
+
+**Beyond straight-line logic**
+
+- [State Machines](./state-machines.md) — event-driven and human-in-the-loop workflows
+- [Rules Engine](./rules-engine.md) — declarative rules over a working memory of facts
+- [Events](./events.md) — `emit_event`, `wait_for`, and workflow-to-workflow messaging
+- [Composing Workflows](./child-workflows.md) — functions, child workflows, and child modes
+
+**Running and shipping it**
+
+- [Runtimes](./dual-runtime.md) — in-memory versus durable execution
+- [How Workflows Run](./how-to-run-workflow.md) — execute modes, entity workflows, run options
+- [Using the Moco CLI](../guides/use-moco-cli.md) — run, test, publish
+- [Running Workflows Through the API](../guides/run-moco-workflow-through-api.md) — REST and MCP
+- [Testing Workflows](../guides/testing.md) — `*.test.yaml` suites
+- [Releasing and Sharing](./release-and-sharing.md) — packages, stages, targets, access control
+
+**Looking something up**
+
+- [Statements Reference](../reference/statements.md)
+- [Workflowspec Reference](../reference/workflowspec-reference.md)
+- [Activity Catalog](../reference/activity-catalog.md)

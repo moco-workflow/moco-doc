@@ -1,4 +1,4 @@
-# Moco Workflowspec Technical Documentation
+# Moco Workflowspec Reference
 
 ## Table of Contents
 
@@ -821,7 +821,7 @@ from bs4 import BeautifulSoup
     output_data:
       - all_context#: "{{ _ }}"
       - trace_id: "{{ __sys_info__.trace_id }}"
-      - workflow_id: "{{ __sys_info__.workflow_id }}"
+      - workflow_id: "{{ __sys_info__['workflow_id'] }}"
 ```
 
 ---
@@ -1254,7 +1254,7 @@ states:
         elements:
           - transform:
               output_data:
-                - entered_at: "{{ __sys_info__.timestamp }}"
+                - entered_at: "{{ now() }}"
           - emit_event:
               input_data:
                 topic: state_events
@@ -1264,7 +1264,7 @@ states:
     on_exit:                         # Runs when leaving state
       transform:
         output_data:
-          - exited_at: "{{ __sys_info__.timestamp }}"
+          - exited_at: "{{ now() }}"
 ```
 
 ### Transitions
@@ -1450,7 +1450,7 @@ body:
                 transform:
                   output_data:
                     - status: completed
-                    - completed_at: "{{ __sys_info__.timestamp }}"
+                    - completed_at: "{{ now() }}"
 
             - name: failed
               is_terminal: true
@@ -1458,7 +1458,7 @@ body:
                 transform:
                   output_data:
                     - status: failed
-                    - failed_at: "{{ __sys_info__.timestamp }}"
+                    - failed_at: "{{ now() }}"
 
           transitions:
             - from_state: validating
@@ -1509,7 +1509,7 @@ Send events to the event bus.
       data:                            # Event payload
         type: order_created
         order_id: "{{ order_id }}"
-        timestamp: "{{ __sys_info__.timestamp }}"
+        timestamp: "{{ now() }}"
 ```
 
 #### Target Specific Workflow
@@ -1608,7 +1608,7 @@ body:
                       workflow_id: "child-{{ iter_item.agent_id }}"
                     input_data:
                       config: "{{ iter_item }}"
-                      parent_workflow_id: "{{ __sys_info__.workflow_id }}"
+                      parent_workflow_id: "{{ __sys_info__['workflow_id'] }}"
                     output_name: child_info
                 - transform:
                     output_data:
@@ -1794,7 +1794,7 @@ Children can access parent workflow ID and communicate via events.
       workflow_id: "worker-{{ task_id }}"
     input_data:
       task: "{{ task_data }}"
-      parent_id: "{{ __sys_info__.workflow_id }}"
+      parent_id: "{{ __sys_info__['workflow_id'] }}"
     output_name: worker_info
 
 - wait_for:
@@ -2118,12 +2118,12 @@ body:
                 version: 1.0.0
               child_mode: async
               execute_options:
-                workflow_id: "agent-{{ iter_item['agent_id'] }}-{{ __sys_info__.workflow_id }}"
+                workflow_id: "agent-{{ iter_item['agent_id'] }}-{{ __sys_info__['workflow_id'] }}"
               input_data:
                 agent_id: "{{ iter_item['agent_id'] }}"
                 config: "{{ iter_item }}"
                 task: "{{ task_description }}"
-                orchestrator_id: "{{ __sys_info__.workflow_id }}"
+                orchestrator_id: "{{ __sys_info__['workflow_id'] }}"
               output_name: agent_info
 
       # Monitor agent progress
@@ -2375,11 +2375,12 @@ Use the schema for:
 
 ## Additional Resources
 
-- **README:** `moco-core/README.md` - Core engine documentation
-- **Examples:** `moco-tools/sample-*.yaml` - Sample workflowspecs
-- **Tests:** `moco-core/tests/` - Unit and integration tests
-- **Schema:** `.github/workflowspec_schema.json` - JSON schema for validation
-- **CLAUDE.md:** Project-level guide and architecture overview
+- **[Statements Reference](./statements.md)** — every statement, with its full field list
+- **[Activity Catalog](./activity-catalog.md)** — every activity type and its input/output contract
+- **[Expressions](../concepts/expressions.md)** — the `{{ }}` language and variable modifiers
+- **[Writing Workflows](../guides/writing-workflows.md)** — authoring patterns
+- **Examples:** the `moco-examples` projects — each is a runnable package with tests
+- **Schema:** `moco schema show` prints the active validation schema and where it came from
 
 ---
 

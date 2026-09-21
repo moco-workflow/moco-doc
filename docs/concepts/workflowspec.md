@@ -134,25 +134,49 @@ input_data:
     format: json
 ```
 
-When executing the workflow:
+Callers supply values for these when they run the workflow. From the CLI:
 
-```python
-# Provide input_data
-result = await client.execute_workflow(
-    workflow_name='my-workflow',
-    workflow_version='1.0.0',
-    input_data={
-        'user_id': '12345',
-        'limit': 20,  # Override default
-        'options': {'verbose': True}
-    }
-)
+```bash
+moco run src/my-workflow.yaml --input '{"user_id": "12345", "limit": 20}'
 ```
 
-**Input validation:**
-- Missing required parameters raise an error
-- Provided values override defaults
-- Extra parameters are ignored
+Through the [API](../guides/run-moco-workflow-through-api.md), as the `input_data` body field:
+
+```json
+{
+  "wfspec_info": {"name": "my-workflow", "version": "1.0.0"},
+  "input_data": {"user_id": "12345", "limit": 20}
+}
+```
+
+Or from a [parent workflow](./child-workflows.md):
+
+```yaml
+- workflow:
+    wfspec:
+      name: my-workflow
+    child_mode: sync
+    input_data:
+      user_id: "{{ customer_id }}"
+      limit: 20
+```
+
+**Input behaviour:**
+- Supplied values override the defaults declared in `input_data`; both land in the workflow context
+- A parameter declared with no default (`user_id:` in YAML is `null`) and not supplied is simply
+  `None`. **Nothing validates it for you** — if the workflow requires it, check it yourself:
+
+  ```yaml
+  - abort:
+      condition: "{{ not user_id }}"
+      type: raise
+      message: "user_id is required"
+  ```
+
+- Extra parameters the caller passes are merged into the context too, not rejected
+
+`input_data` doubles as the workflow's documented interface: it is the list of what a caller may
+pass. Keep it accurate, and give a default wherever a sensible one exists.
 
 ### output_name
 
@@ -258,7 +282,7 @@ body:
                 status: "{{ status }}"
                 total: "{{ total }}"
                 tracking: "{{ shipment.tracking_number }}"
-                processed_at: "{{ __sys_info__.timestamp }}"
+                processed_at: "{{ now() }}"
 ```
 
 ## Best Practices
@@ -295,17 +319,27 @@ body:
 
 ## Schema Validation
 
-Workflowspecs can be validated against the JSON schema:
+Every wfspec is checked against a JSON schema. Validate locally, before anything is published — it
+needs no login and no running service, so it belongs in a pre-commit hook and in CI:
 
 ```bash
-# Located at:
-scripts/schema_gen/schemas/workflowspec_schema.json
+moco validate src/my-workflow.yaml
 ```
 
-Use with:
-- VSCode YAML extension (auto-completion)
-- CI/CD validation
-- Pre-deployment checks
+The schema ships with the CLI and also drives autocompletion and inline diagnostics in the VSCode
+extension. The service's schema advances as activities are added, so refresh yours occasionally:
+
+```bash
+moco schema update     # download the current schema from your Moco service
+moco schema show       # show the active schema and where it came from
+```
+
+If your editor supports the YAML language server, point a file at the schema directly for
+autocompletion without the extension:
+
+```yaml
+# yaml-language-server: $schema=<path-to>/workflowspec_schema.json
+```
 
 ## Next Steps
 

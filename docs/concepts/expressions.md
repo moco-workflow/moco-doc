@@ -98,7 +98,9 @@ message#jinja: >
 
 ### Python Builtins
 
-Whitelisted safe builtins (no `eval`, `exec`, `open`, `__import__`):
+Whitelisted safe builtins. `eval`, `exec`, `open`, `compile`, `globals`, `getattr`/`setattr` and
+the other introspection builtins are removed; `__import__` is unreachable because the expression
+scanner rejects the name outright.
 
 ```python
 abs, all, any, bool, dict, enumerate, filter, float, int, len, list,
@@ -128,9 +130,15 @@ Pre-imported libraries available in expressions:
 import numpy as np
 import pandas as pd
 import pyarrow as pa
-from glom import glom
-from bs4 import BeautifulSoup
+import glom          # the module: call glom.glom(...), not glom(...)
+import bs4           # bs4.BeautifulSoup(...)
 ```
+
+Each is exposed through a read-only proxy, so **submodules are not reachable** — `pd.io`,
+`pd.api`, `np.random`, `np.ctypeslib`, `glom.core` and `pa.fs` all raise. Functions that read or
+write the filesystem are either restricted to in-memory buffers (`pd.read_csv(StringIO(...))` is
+fine, `pd.read_csv('/path')` is not) or removed (`pd.read_pickle`, `np.load`). For YAML, only
+`safe_load`, `safe_dump` and `dump` are available.
 
 Examples:
 
@@ -143,8 +151,8 @@ array: "{{ np.array([1, 2, 3]) }}"
 df: "{{ pd.DataFrame({'col1': [1, 2], 'col2': [3, 4]}) }}"
 filtered: "{{ df[df['col1'] > 1] }}"
 
-# Glom for complex data extraction
-value: "{{ glom(data, 'path.to.nested.value') }}"
+# Glom for complex data extraction (data paths only — no attribute traversal)
+value: "{{ glom.glom(data, 'path.to.nested.value') }}"
 ```
 
 ### Special Variables
@@ -159,11 +167,20 @@ value: "{{ glom(data, 'path.to.nested.value') }}"
 | `__sys_info__` | System information |
 
 **System Info (`__sys_info__`):**
-- `trace_id`: Root trace identifier (shared across parent and all child workflows)
-- `tier`: Execution tier
-- `workflow_id`: Current workflow ID
-- `parent_workflow_id`: Parent workflow ID (if child)
-- `timestamp`: Current timestamp
+
+| Field | Description |
+|-------|-------------|
+| `trace_id` | Root trace identifier, shared by the parent and every child workflow |
+| `workflow_id` | This workflow instance's ID |
+| `tier` | Execution tier (`dev`, `beta`, `prod`) — useful for pointing at a staging endpoint outside production |
+| `wfspec_name`, `wfspec_version` | The running spec's identity |
+| `wfspec_callstack` | The chain of specs that led here |
+| `is_continue_as_new` | `True` when this execution was restarted by a [continue-as-new checkpoint](../reference/statements.md#continue_as_new_checkpoint). Always a bool, so it is safe to use directly as a condition |
+| `state_machine` | Info about the enclosing state machine; present only while one is running |
+| `debug_mode`, `enable_otel_trace` | Whether debug events and OTel tracing are on for this run |
+
+There is no current-timestamp field here — use the `builtin.now` activity, whose result is recorded
+and therefore stable across a replay.
 
 Examples:
 
@@ -173,7 +190,7 @@ all_data: "{{ _ }}"
 
 # System info
 trace: "{{ __sys_info__.trace_id }}"
-wf_id: "{{ __sys_info__.workflow_id }}"
+wf_id: "{{ __sys_info__['workflow_id'] }}"
 
 # Iteration
 - iteration:
