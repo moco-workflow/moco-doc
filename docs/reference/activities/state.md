@@ -4,7 +4,7 @@ sidebar_label: State Store
 
 # State Store Activities
 
-Eight activities read and write a durable key/value store that outlives any single workflow run.
+Nine activities read and write a durable key/value store that outlives any single workflow run.
 Use it to remember something between runs — a watermark, a task record, a cached lookup — where
 workflow context, which dies with the run, would not do.
 
@@ -61,7 +61,7 @@ Patterns (`key_pattern`, `topic_pattern`, `name_pattern`) use `*` as the wildcar
 
 ## Defaults
 
-All eight: 60 s timeout, 3 attempts. All are safe to retry — writes are upserts and deletes are
+All nine: 60 s timeout, 3 attempts. All are safe to retry — writes are upserts and deletes are
 idempotent.
 
 ---
@@ -348,5 +348,46 @@ An integer: the number of rows deleted.
 `topic_pattern` is required — there is no accidental "delete everything" — but a broad pattern
 still clears the whole namespace. Run [`list_states`](#builtinstatelist_states) with the same
 pattern first to see what will go. Note also that rows with no topic are never matched, so this
-cannot be used to empty a namespace completely.
+cannot be used to empty a namespace completely — use
+[`delete_namespace`](#builtinstatedelete_namespace) for that.
+:::
+
+## `builtin.state.delete_namespace`
+
+Deletes every entry in a namespace, and returns how many it removed.
+
+**Input**
+
+| Field | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `namespace` | str | yes | — | Namespace to empty |
+| `in_global_ns` | bool | no | `false` | Operate on the shared namespace |
+
+**Output**
+
+An integer: the number of rows deleted. A namespace that holds nothing returns `0` rather than
+failing.
+
+**Example**
+
+```yaml
+- activity:
+    name: drop-scratch-space
+    type: builtin.state.delete_namespace
+    input_data:
+      namespace: "scratch"
+    output_name: deleted_count   # -> e.g. 17
+```
+
+:::caution This deletes the entire namespace
+Unlike [`delete_by_topic`](#builtinstatedelete_by_topic), this **does** remove untagged rows, so
+it is the only way to empty a namespace completely. Run
+[`list_states`](#builtinstatelist_states) first to see what will go.
+
+With `in_global_ns: true` the namespace must not contain `:`. A global namespace is by definition
+one without a colon, so the restriction costs nothing — it stops a global delete resolving into
+another user's scope.
+
+The namespace itself is not a record. It exists exactly as long as a key carries its name, so
+deleting the keys is what makes the namespace disappear.
 :::

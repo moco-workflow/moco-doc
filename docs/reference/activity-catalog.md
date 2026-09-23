@@ -154,6 +154,7 @@ browser session to one worker — and must not be overridden.
 | [`builtin.state.list_namespaces`](./activities/state.md#builtinstatelist_namespaces) | List namespaces holding data |
 | [`builtin.state.update_topic`](./activities/state.md#builtinstateupdate_topic) | Retag an entry without rewriting it |
 | [`builtin.state.delete_by_topic`](./activities/state.md#builtinstatedelete_by_topic) | Delete every entry matching a topic pattern |
+| [`builtin.state.delete_namespace`](./activities/state.md#builtinstatedelete_namespace) | Delete every entry in a namespace |
 
 ### Secrets
 
