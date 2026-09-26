@@ -125,6 +125,7 @@ browser session to one worker — and must not be overridden.
 | [Claude Agent](./activities/claude-agent.md) | 1 | An autonomous agent loop with granted tools |
 | [LlamaIndex](./activities/llama-index.md) | 7 | Building and querying a vector index — RAG |
 | [Langfuse](./activities/langfuse.md) | 2 | Online and offline LLM evaluation |
+| [TypeSafe](./activities/typesafe.md) | 1 | Typed yes/no, choice and score decisions (TypeSafe System One or Laya) |
 | [Playwright](./activities/playwright.md) | 26 | Browser automation |
 | [Selenium](./activities/selenium.md) | 23 | Browser automation via WebDriver |
 | [Authorization](./activities/authz.md) | 4 | Evaluating authorization policy from a workflow |
@@ -233,6 +234,7 @@ browser session to one worker — and must not be overridden.
 | [`llama_index.query`](./activities/llama-index.md#llama_indexquery) | Semantic search, retrieving chunks or synthesizing an answer |
 | [`langfuse.run_experiment`](./activities/langfuse.md#langfuserun_experiment) | Offline evaluation over a Langfuse dataset |
 | [`langfuse.create_score`](./activities/langfuse.md#langfusecreate_score) | Attach scores to the running workflow's trace |
+| [`typesafe.system_one`](./activities/typesafe.md#typesafesystem_one) | Answer named noul/choice/score questions about text or JSON |
 
 ### Browser automation — Playwright
 

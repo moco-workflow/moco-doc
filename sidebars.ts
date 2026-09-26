@@ -59,6 +59,7 @@ const sidebars: SidebarsConfig = {
             'reference/activities/claude-agent',
             'reference/activities/llama-index',
             'reference/activities/langfuse',
+            'reference/activities/typesafe',
             'reference/activities/gdrive',
             'reference/activities/k8s',
             'reference/activities/kafka',
