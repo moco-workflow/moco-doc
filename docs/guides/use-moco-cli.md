@@ -20,19 +20,19 @@ through install, login, and your first workflow. This guide is the command-by-co
 
 ## Installation
 
-The CLI and its shared library are published as npm tarballs under
+The CLI is published as an npm tarball under
 [`https://www.my-moco.com/tools/`](https://www.my-moco.com/tools/):
 
 ```bash
-curl -O https://www.my-moco.com/tools/moco-lib-1.0.0.tgz
 curl -O https://www.my-moco.com/tools/moco-cli-1.0.0.tgz
 
-npm i -g moco-lib-1.0.0.tgz moco-cli-1.0.0.tgz
+npm i -g moco-cli-1.0.0.tgz
 
 moco --help
 ```
 
-Install both together — `moco-cli` depends on `moco-lib`. Node.js 18+ is required.
+It is a single self-contained package. Node.js 18+ is required. If you installed an older
+version that shipped a separate `moco-lib` tarball, remove it with `npm uninstall -g @moco/lib`.
 
 ---
 

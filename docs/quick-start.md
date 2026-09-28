@@ -31,20 +31,19 @@ workflows execute on the Moco service.
 
 ### Install
 
-The CLI and its shared library are published as tarballs under
+The CLI is published as a tarball under
 [`https://www.my-moco.com/tools/`](https://www.my-moco.com/tools/) (the directory is browsable —
 use it to check for newer versions).
 
 ```bash
-curl -O https://www.my-moco.com/tools/moco-lib-1.0.0.tgz
 curl -O https://www.my-moco.com/tools/moco-cli-1.0.0.tgz
 
-npm i -g moco-lib-1.0.0.tgz moco-cli-1.0.0.tgz
+npm i -g moco-cli-1.0.0.tgz
 
 moco --help
 ```
 
-Install both tarballs together — `moco-cli` depends on `moco-lib`.
+It is a single self-contained package.
 
 ### Point the CLI at your Moco service
 

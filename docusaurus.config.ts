@@ -107,7 +107,9 @@ const config: Config = {
         src: 'img/moco-mark.svg',
       },
       // No docSidebar item: it pointed at the same place the logo does now that
-      // the overview is the docs root, and the sidebar is always on screen.
+      // the overview is the docs root, and the sidebar is always reachable — on
+      // narrow screens through the hamburger menu (see `.navbar-sidebar--show` in
+      // custom.css for why that menu used to open clipped).
       items: [
         ...siteNavbarItems,
         {
