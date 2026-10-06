@@ -25,7 +25,7 @@ A missing value is a hard error, not a silent fallback. The worker needs the `la
 
 :::caution These are raw credentials, not secret names
 This is the only provider that takes credentials inline rather than as a `*_secret_key`. A key
-written into a workflowspec passes through workflow context and history in plaintext — prefer
+written into a wfspec passes through workflow context and history in plaintext — prefer
 configuring the environment variables on the worker and omitting the fields entirely.
 :::
 
@@ -47,10 +47,10 @@ trace id, which is correct when the deployment exports OpenTelemetry traces to L
 Runs every item of a Langfuse dataset through a **task workflow**, then scores each result with one
 or more **evaluator workflows**, and records the run in Langfuse.
 
-Each dataset item's `input` is handed to the task workflow as its `input_data`, unchanged — no
+Each dataset item's `input` is handed to the task workflow as its input, unchanged — no
 schema is imposed, so the dataset must be shaped to match the workflow's inputs. Each evaluator
 receives `{input, output, expected_output, metadata}` and must return a dict, or a list of dicts,
-carrying `name` and `value`; a missing `name` defaults to the evaluator's workflowspec name.
+carrying `name` and `value`; a missing `name` defaults to the evaluator's workflow name.
 
 **Input**
 
@@ -72,9 +72,9 @@ carrying `name` and `value`; a missing `name` defaults to the evaluator's workfl
 
 | Field | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
-| `name` | str | no | `null` | Name of a deployed workflowspec |
+| `name` | str | no | `null` | Name of a deployed wfspec |
 | `version` | str | no | latest | Version to run |
-| `content` | str \| list[str] | no | `null` | The workflowspec YAML inline, instead of a deployed name |
+| `content` | str \| list[str] | no | `null` | The wfspec YAML inline — a complete document with `header` and `main` — instead of a deployed name |
 
 **Output**
 
@@ -91,20 +91,44 @@ carrying `name` and `value`; a missing `name` defaults to the evaluator's workfl
 
 **Example**
 
-From `moco-examples/moco-agent-evaluation/src/moco-agent-evaluation.yaml`:
+Running a deployed task workflow against a dataset, with three deployed evaluators:
 
 ```yaml
-- activity:
+- task_name: run-experiment
+  activity:
     type: langfuse.run_experiment
-    input_data:
-      dataset_name: '{{dataset_name}}'
+    input:
+      dataset_name: '{{ dataset_name }}'
       task:
         name: moco-agent/moco-agent-cli
       evaluators:
         - name: is_valid-wfspec
         - name: is_runnable-wfspec
         - name: llm-judge
-    output_name: experiment_result
+  output:
+    as: experiment_result
+```
+
+An evaluator is an ordinary workflow. It declares the four inputs it receives and returns its
+score as the workflow `output`:
+
+```yaml
+header:
+  schema_version: 2.0.0
+  workflow_name: exact-match
+
+input:
+  input:
+  output:
+  expected_output:
+  metadata:
+
+output:
+  name: exact_match
+  value: '{{ 1.0 if output == expected_output else 0.0 }}'
+
+main:
+  set: []
 ```
 
 :::caution Each dataset item starts a top-level workflow
@@ -162,14 +186,14 @@ Supply either the single-score shorthand (`name` / `value` / …) **or** a `scor
 
 **Example**
 
-From `moco-examples/moco-agent-evaluation/src/online-score.yaml`:
+Online scoring at the end of a run, skipped when there is no verdict to record:
 
 ```yaml
-- activity:
+- task_name: record_scores
+  skip_if: '{{ not verdict }}'
+  activity:
     type: langfuse.create_score
-    name: record_scores
-    condition: "{{ len(verdict) > 0 }}"
-    input_data:
+    input:
       scores:
         - name: correctness
           value: "{{ float(verdict.get('correctness', 0.0)) }}"
@@ -178,7 +202,8 @@ From `moco-examples/moco-agent-evaluation/src/online-score.yaml`:
         - name: tone
           value: "{{ verdict.get('tone', 'unknown') }}"
           data_type: CATEGORICAL
-    output_name: score_result
+  output:
+    as: score_result
 ```
 
 :::note Retries upsert rather than duplicate

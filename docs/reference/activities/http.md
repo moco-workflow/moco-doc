@@ -77,47 +77,77 @@ The output of [`builtin.secret.get`](./secret.md#builtinsecretget). Pass it thro
 
 **Examples**
 
-A GET with an explicit retry policy, from
-`moco-examples/moco-workflow-demo/src/activity-options-demo.yaml`:
+A GET with an explicit retry policy, reading the parsed body:
 
 ```yaml
-- activity:
-    name: fetch-with-retry
+- task_name: fetch-with-retry
+  activity:
     type: http.request
-    input_data:
+    input:
       method: GET
       url: https://httpbin.org/get?demo=retry
-    retry_policy:
-      timeout_sec: 10
-      max_attempts: 3
-      initial_interval_sec: 1
-      backoff_coefficient: 2.0
-      non_retryable_error_types:
-        - ValueError
-    output_data:
-      - fetched_args: '{{ _raw_output.get("json", {}).get("args") if _raw_output else None }}'
+      output_json: true
+    options:
+      retry_policy:
+        timeout_sec: 10
+        max_attempts: 3
+        initial_interval_sec: 1
+        backoff_coefficient: 2.0
+        non_retryable_error_types:
+          - ValueError
+  output:
+    set:
+      - fetched_args: '{{ _["json"].get("args") }}'
 ```
 
-A POST with a JSON body, reading the parsed response:
+A POST with a JSON body, keeping the whole response:
 
 ```yaml
-- activity:
-    name: create-order
+- task_name: create-order
+  activity:
     type: http.request
-    input_data:
+    input:
       method: POST
       url: https://api.example.com/orders
       headers:
         Accept: application/json
       json_data:
-        order_id: "{{ order_id }}"
-        items: "{{ items }}"
+        order_id: '{{ order_id }}'
+        items: '{{ items }}'
       output_json: true
       raise_for_status: true
-    retry_policy:
-      max_attempts: 1        # POST is not idempotent
-    output_name: created     # -> status_code, is_success, headers, json
+    options:
+      retry_policy:
+        max_attempts: 1      # POST is not idempotent
+  output:
+    as: created              # -> status_code, is_success, headers, json
 ```
+
+A non-2xx response is data unless `raise_for_status` is set, so branch on `is_success`. With
+`raise_for_status: true`, handle the failure with `on_error` instead:
+
+```yaml
+- task_name: lookup-customer
+  activity:
+    type: http.request
+    input:
+      method: GET
+      url: 'https://api.example.com/customers/{{ customer_id }}'
+      output_json: true
+      raise_for_status: true
+  output:
+    data: '{{ _["json"] }}'
+    as: customer
+  on_error:
+    catch: true              # the error is consumed; `do`'s result becomes the task's result
+    do:
+      set:
+        - customer: null
+        - lookup_error: '{{ _["error_message"] }}'
+```
+
+More request shapes (form body, bearer token, 404 as data) are in
+`moco-examples-v2/activities/http-request.yaml`.
 
 ## Authentication
 
@@ -127,20 +157,24 @@ hand the blob straight to `encrypted_auth_token` — the activity decrypts it in
 plaintext token never enters workflow context.
 
 ```yaml
-- activity:
+- task_name: get-token
+  activity:
     type: builtin.secret.get
-    input_data:
+    input:
       secret_name: PARTNER_API_TOKEN
-    output_name: api_token
+  output:
+    as: api_token
 
-- activity:
+- task_name: list-accounts
+  activity:
     type: http.request
-    input_data:
+    input:
       method: GET
       url: https://api.partner.example.com/v1/accounts
-      encrypted_auth_token: "{{ api_token }}"
+      encrypted_auth_token: '{{ api_token }}'
       output_json: true
-    output_name: accounts
+  output:
+    as: accounts
 ```
 
 For any other scheme — an API key header, basic auth — build the header yourself, but note that
@@ -148,10 +182,10 @@ doing so puts the credential into workflow context and history.
 
 :::caution The default retry policy retries writes
 `http.request` inherits the platform default of 3 attempts. A `POST` that is not idempotent will
-be sent up to three times on transient failures; set `max_attempts: 1` for those.
+be sent up to three times on transient failures; set `options.retry_policy.max_attempts: 1` for those.
 :::
 
 :::note Request timeout
-When `retry_policy.timeout_sec` is not set, the underlying HTTP client uses a 45-second timeout —
+When `options.retry_policy.timeout_sec` is not set, the underlying HTTP client uses a 45-second timeout —
 shorter than the 60-second activity default. Set `timeout_sec` explicitly for slow endpoints.
 :::

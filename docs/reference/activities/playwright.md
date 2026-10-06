@@ -18,37 +18,53 @@ reliable.
 a live browser owned by one worker process, so the whole script — from `browser.create` to
 `browser.close` — must stay on that worker.
 
-**This is why every activity on this page runs locally by default** (`execute_locally: true`). A
-local activity always runs in the calling workflow's own worker, which pins the session.
+**This is why every activity on this page runs locally by default**
+(`options.execute_locally: true`). A local activity always runs in the calling workflow's own
+worker, which pins the session.
 
 ```yaml
-- activity:
-    type: playwright.browser.create      # execute_locally is already true
-    input_data:
+- task_name: open-browser
+  activity:
+    type: playwright.browser.create   # local by default
+    input:
       browser_type: chromium
-    output_name: session
+  output:
+    as: session
 
-- activity:
-    type: playwright.page.goto           # runs on the same worker as above
-    input_data:
-      session_id: "{{ session['session_id'] }}"
-      url: https://example.com
+- task_name: browse
+  tasks:
+    - task_name: open-page
+      activity:
+        type: playwright.page.goto   # same worker as open-browser
+        input:
+          session_id: "{{ session['session_id'] }}"
+          url: https://example.com
+    # ... more page and element tasks
+  on_error:
+    do:   # runs on failure; the error still propagates
+      task_name: close-after-error
+      activity:
+        type: playwright.browser.close
+        input:
+          session_id: "{{ session['session_id'] }}"
 
-- activity:
+- task_name: close-browser
+  activity:
     type: playwright.browser.close
-    input_data:
+    input:
       session_id: "{{ session['session_id'] }}"
 ```
 
-:::caution Do not set `execute_locally: false`
+:::caution Do not set `options.execute_locally: false`
 The workflow will still validate and start, but the session is no longer pinned to one worker and
-any step after `browser.create` can fail with an unknown session.
+any task after `browser.create` can fail with an unknown session.
 :::
 
 :::caution Always close the session
 Sessions are per user and expire on a timer, but the per-user cap means leaked sessions eventually
-make `browser.create` fail. Close in a `finally`-style branch so a failure mid-script still
-releases the browser. A worker restart destroys every live session; there is no reconnection.
+make `browser.create` fail. Close it in an `on_error.do` handler too, as above, so a failure
+mid-script still releases the browser. A worker restart destroys every live session; there is no
+reconnection.
 :::
 
 ## Setup
@@ -124,16 +140,17 @@ Launches a browser and returns a session id.
 **Example**
 
 ```yaml
-- activity:
-    name: open-browser
+- task_name: open-browser
+  activity:
     type: playwright.browser.create
-    input_data:
+    input:
       browser_type: chromium
       options:
         headless: true
         viewport_width: 1440
         viewport_height: 900
-    output_name: session
+  output:
+    as: session
 ```
 
 ### `playwright.browser.close`
@@ -145,10 +162,10 @@ Closes the session and frees the browser.
 **Output** — `{success: bool}`.
 
 ```yaml
-- activity:
-    name: close-browser
+- task_name: close-browser
+  activity:
     type: playwright.browser.close
-    input_data:
+    input:
       session_id: "{{ session['session_id'] }}"
 ```
 
@@ -187,14 +204,15 @@ Navigates to a URL.
 **Output** — `{url: str}`, the URL actually landed on after redirects.
 
 ```yaml
-- activity:
-    name: open-login
+- task_name: open-login
+  activity:
     type: playwright.page.goto
-    input_data:
+    input:
       session_id: "{{ session['session_id'] }}"
       url: "https://app.example.com/login"
       wait_until: networkidle
-    output_name: landed
+  output:
+    as: landed
 ```
 
 ### `playwright.page.back` / `playwright.page.forward` / `playwright.page.reload`
@@ -216,14 +234,15 @@ All four take the [common fields](#common-input-fields).
 Clicks the matched element. **Output** — `{status: str}`.
 
 ```yaml
-- activity:
-    name: submit-login
+- task_name: submit-login
+  activity:
     type: playwright.element.click
-    input_data:
+    input:
       session_id: "{{ session['session_id'] }}"
       selector: "button[type=submit]"
-    retry_policy:
-      max_attempts: 1        # submitting twice would be wrong
+    options:
+      retry_policy:
+        max_attempts: 1        # submitting twice would be wrong
 ```
 
 ### `playwright.element.fill`
@@ -235,7 +254,7 @@ Sets an input's value in one operation — faster and more reliable than typing.
 ```yaml
 - activity:
     type: playwright.element.fill
-    input_data:
+    input:
       session_id: "{{ session['session_id'] }}"
       selector: "#username"
       text: "{{ username }}"
@@ -263,7 +282,7 @@ Chooses a `<select>` option by value, label or index — supply exactly one.
 ```yaml
 - activity:
     type: playwright.element.select
-    input_data:
+    input:
       session_id: "{{ session['session_id'] }}"
       selector: "#region"
       label: "Europe"
@@ -278,17 +297,15 @@ Chooses a `<select>` option by value, label or index — supply exactly one.
 **Input** — common fields. **Output** — `{text: str}`.
 
 ```yaml
-- activity:
-    name: read-total
+- task_name: read-total
+  activity:
     type: playwright.element.get_text
-    input_data:
+    input:
       session_id: "{{ session['session_id'] }}"
       selector: ".order-total"
-    output_name: total
-
-- transform:
-    output_data:
-      - order_total: "{{ float(total['text'].strip('$')) }}"
+  output:
+    set:
+      - order_total: "{{ float(_['text'].strip('$')) }}"
 ```
 
 ### `playwright.element.get_attribute`
@@ -313,13 +330,14 @@ Counts matching elements. **Input** — `session_id`, `selector`, `selector_type
 **Output** — `{count: int}`.
 
 ```yaml
-- activity:
-    name: count-rows
+- task_name: count-rows
+  activity:
     type: playwright.element.query_selector_all
-    input_data:
+    input:
       session_id: "{{ session['session_id'] }}"
       selector: "table.results tbody tr"
-    output_name: rows        # -> count
+  output:
+    as: rows        # -> count
 ```
 
 ---
@@ -354,14 +372,15 @@ This is the usual hand-off point: render with Playwright, then parse the HTML el
 **Output** — `{screenshot: str, format: str}`, the image base64-encoded.
 
 ```yaml
-- activity:
-    name: capture
+- task_name: capture
+  activity:
     type: playwright.page.screenshot
-    input_data:
+    input:
       session_id: "{{ session['session_id'] }}"
       format: png
       full_page: true
-    output_name: shot        # -> screenshot (base64), format
+  output:
+    as: shot        # -> screenshot (base64), format
 ```
 
 :::note Screenshots are large
@@ -376,13 +395,14 @@ Runs JavaScript in the page and returns its result.
 **Input** — `session_id`, `script` (str, required). **Output** — `{result: any}`.
 
 ```yaml
-- activity:
-    name: read-app-state
+- task_name: read-app-state
+  activity:
     type: playwright.page.evaluate
-    input_data:
+    input:
       session_id: "{{ session['session_id'] }}"
       script: "() => window.__APP_STATE__.orders.length"
-    output_name: order_count   # -> result
+  output:
+    as: order_count   # -> result
 ```
 
 ---
@@ -397,10 +417,10 @@ Waits for an element to reach a state.
 `visible` or `hidden`). **Output** — `{status: str}`.
 
 ```yaml
-- activity:
-    name: wait-for-results
+- task_name: wait-for-results
+  activity:
     type: playwright.page.wait_for_selector
-    input_data:
+    input:
       session_id: "{{ session['session_id'] }}"
       selector: "table.results"
       state: visible

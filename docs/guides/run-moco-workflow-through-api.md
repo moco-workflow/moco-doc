@@ -80,7 +80,7 @@ curl -X POST https://www.my-moco.com/api/workflow/execute \
   }'
 ```
 
-The response body is the workflow's result — whatever `output_name` resolved to — encoded as JSON.
+The response body is the workflow's result — what its `output` evaluated to — encoded as JSON.
 
 `wfspec_info` identifies the workflow three ways:
 
@@ -101,13 +101,13 @@ curl -X POST https://www.my-moco.com/api/workflow/execute \
   -H "Content-Type: application/json" \
   -d '{
     "wfspec_info": {
-      "content": "wfspec_name: adhoc\nwfspec_version: 1.0.0\noutput_name: result\nbody:\n  transform:\n    output_data:\n      - result: \"{{ 6 * 7 }}\"\n"
+      "content": "header:\n  schema_version: 2.0.0\n  workflow_name: adhoc\noutput: \"{{ answer }}\"\nmain:\n  set:\n    - answer: \"{{ 6 * 7 }}\"\n"
     }
   }'
 ```
 
 For a bundle, pass `content` as an array — the first element is the entry point and the rest are
-child workflows it may reference by name.
+child workflows it may reference by `ref`, using their `workflow_name`.
 
 ### Starting and managing a long run
 
@@ -130,8 +130,8 @@ curl -X POST https://www.my-moco.com/api/workflow/cancel \
   -d '{"workflow_id": "order-monitor:1.0.0:alice:6f1c…"}'
 ```
 
-A generated ID has the form `{wfspec_name}:{wfspec_version}:{user_id}:{trace_id}`, so a run is
-identifiable at a glance. Supply your own `workflow_id` in `options` when you need a specific
+A generated ID has the form `{workflow_name}:{version}:{user_id}:{trace_id}`, where `version` is
+the package version, so a run is identifiable at a glance. Supply your own `workflow_id` in `options` when you need a specific
 address — see [entity workflows](#entity_workflow_args).
 
 `status` reports `running`, `completed`, `failed`, `cancelled`, `terminated`, or `unknown`, along
@@ -173,8 +173,8 @@ curl -X POST https://www.my-moco.com/api/activity/execute \
 | `401` | Missing, malformed, expired, or revoked credential |
 | `500` | Execution failed. The body carries the error detail |
 
-A workflow that runs to completion but *aborts* is a successful HTTP call — the abort is reported in
-the result, not the status code.
+A workflow that stops early with `raise` `type: terminate` is a successful HTTP call — the
+`terminate_message` is reported in the result, not the status code.
 
 ---
 
@@ -213,7 +213,7 @@ error, so an agent can read and reason about them.
 ### Streaming progress
 
 `execute_workflow` is the one tool that streams. While the workflow runs, it reports MCP **progress
-notifications**, each carrying a serialized debug event: statement boundaries, activity dispatches,
+notifications**, each carrying a serialized debug event: task boundaries, activity dispatches,
 and the value of any variable marked with the `#` modifier. This is what produces the live output
 you see from `moco run`, and it lets an agent narrate a long workflow instead of blocking silently.
 
@@ -257,7 +257,6 @@ the run is dispatched, never *what* it does — the workflow's own inputs go in 
 | `catch_exception` | bool | Return the error as a result instead of failing the run |
 | `retry_policy` | object | Timeout and retry configuration for the run |
 | `entity_workflow_args` | object | Entity-workflow / signal-with-start configuration |
-| `child_mode` | string | Only meaningful for child workflow execution |
 
 ### execute_mode
 

@@ -74,44 +74,46 @@ Workers have no shared filesystem with the caller, so attachment content travels
 
 **Examples**
 
-An alert with both bodies, from `moco-examples/web-crawler-demo/src/web-crawler-demo.yaml`:
+An alert with both bodies:
 
 ```yaml
-- activity:
+- task_name: send-availability-alert
+  activity:
     type: email.send
-    name: send_availability_alert
-    retry_policy:
-      timeout_sec: 30
-    input_data:
-      smtp_host: "{{ smtp_host }}"
-      smtp_port: "{{ smtp_port }}"
-      username: "{{ smtp_username }}"
-      password_secret_key: "{{ smtp_password_key }}"
-      from_address: "{{ alert_from }}"
-      to_addresses: "{{ alert_to }}"
-      subject: "NYU tour availability found ({{ len(found_dates) }} date(s))"
+    input:
+      smtp_host: '{{ smtp_host }}'
+      smtp_port: '{{ smtp_port }}'
+      username: '{{ smtp_username }}'
+      password_secret_key: '{{ smtp_password_key }}'
+      from_address: '{{ alert_from }}'
+      to_addresses: '{{ alert_to }}'
+      subject: 'NYU tour availability found ({{ len(found_dates) }} date(s))'
       body_text: >-
         Tour availability was found for NYU in-person visits.
       body_html: >-
         <h2>NYU Visit Tour availability found</h2>
+    options:
+      retry_policy:
+        timeout_sec: 30
 ```
 
 Attaching a generated report, relying on the worker's SMTP configuration:
 
 ```yaml
-- activity:
-    name: mail-report
+- task_name: mail-report
+  activity:
     type: email.send
-    input_data:
-      from_address: "reports@example.com"
-      to_addresses: ["ops@example.com"]
-      subject: "Daily report {{ run_date }}"
-      body_text: "The report for {{ run_date }} is attached."
+    input:
+      from_address: reports@example.com
+      to_addresses: [ops@example.com]
+      subject: 'Daily report {{ run_date }}'
+      body_text: 'The report for {{ run_date }} is attached.'
       attachments:
-        - filename: "report-{{ run_date }}.csv"
-          content_type: "text/csv"
-          data: "{{ base64.b64encode(report_csv.encode()).decode() }}"
-    output_name: mail_result   # -> success, message_id, recipients_accepted, recipients_rejected
+        - filename: 'report-{{ run_date }}.csv'
+          content_type: text/csv
+          data: '{{ base64.b64encode(report_csv.encode()).decode() }}'
+  output:
+    as: mail_result          # -> success, message_id, recipients_accepted, recipients_rejected
 ```
 
 :::caution `success` does not mean every recipient got it
@@ -119,14 +121,16 @@ Attaching a generated report, relying on the worker's SMTP configuration:
 check that `recipients_rejected` is empty:
 
 ```yaml
-- abort:
-    condition: "{{ len(mail_result['recipients_rejected']) > 0 }}"
-    type: raise
-    message: "Rejected recipients: {{ mail_result['recipients_rejected'] }}"
+- task_name: require-all-recipients
+  raise:
+    if: '{{ len(mail_result["recipients_rejected"]) > 0 }}'
+    type: error
+    error_type: EmailRejected
+    message: 'Rejected recipients: {{ mail_result["recipients_rejected"] }}'
 ```
 :::
 
 :::note Retries re-send the message
 `email.send` defaults to 2 attempts and there is no deduplication — a retry after a timeout can
-deliver the message twice. Set `max_attempts: 1` where a duplicate would be worse than a miss.
+deliver the message twice. Set `options.retry_policy.max_attempts: 1` where a duplicate would be worse than a miss.
 :::

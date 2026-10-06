@@ -16,8 +16,8 @@ covers a wide range of workflows, and it stays readable by the people who own th
 
 **A workflow is released like data, not like software.** Because a wfspec is a document rather than
 code compiled into the runtime, you publish and deploy it yourself, on demand, through the CLI or
-the web console. Versioning, access control, and staged rollout are properties of the document, so
-workflows can be shared and composed without a backend deployment for every change.
+the web console. Versioning, access control, and staged rollout are properties of the published
+package, so workflows can be shared and composed without a backend deployment for every change.
 
 **Durability is the platform's problem.** Workflows run durably on Temporal — surviving crashes,
 restarts, and multi-day waits — without you writing any state-management or checkpointing logic. The
@@ -27,63 +27,74 @@ same wfspec also runs in-memory with no infrastructure at all when you want spee
 
 A **workflowspec** is a YAML document that defines a complete workflow. It specifies:
 
-- Workflow identity (name and version)
-- Input parameters
+- Workflow identity (`header.workflow_name`; the version comes from the package it is published in)
+- Input parameters and their defaults
 - Initial context variables
-- The workflow body (execution logic)
-- Output specification
+- The main task (execution logic)
+- The workflow result
 
 ```yaml
-wfspec_name: my-workflow
-wfspec_version: 1.0.0
+header:
+  schema_version: 2.0.0
+  workflow_name: my-workflow
 context:
   status: pending
-input_data:
+input:
   user_id:
-output_name: result
-body:
-  # Workflow logic here
+output:
+  user_id: '{{ user_id }}'
+  status: '{{ status }}'
+main:
+  tasks:
+    - set:
+        - status: done
 ```
 
-## Statements
+See [Workflowspec Structure](./workflowspec.md).
 
-Statements are the building blocks of workflows. They come in two categories:
+## Tasks
 
-### Primitive Statements
-Leaf nodes that perform specific actions:
-- **transform**: Data transformations and variable assignments
-- **abort**: Stop the workflow (abort, terminate, break, raise)
+Tasks are the building blocks of workflows. Every task has exactly one **kind** key, plus optional
+shared keys: `task_name`, `skip_if`, `props`, `output` and `on_error`.
+
+### Primitive tasks
+Leaf tasks that perform one action:
+- **set**: Assign variables
 - **activity**: Execute an activity — the bridge to the outside world
-- **workflow**: Execute a child workflow
-- **call**: Invoke a reusable `function` defined in the same wfspec
+- **workflow**: Execute a child workflow, or a `function` defined in the same wfspec
+- **raise**: Fail, stop the workflow early, or leave a container or loop
 - **wait_for**: Wait for an event or a timeout
 - **emit_event**: Send an event to the event bus
-- **continue_as_new_checkpoint**: Restart a long-running workflow with a fresh history
-
-### Composite Statements
-Containers that orchestrate other statements:
-- **sequence**: Execute statements sequentially
-- **parallel**: Execute statements concurrently
-- **iteration**: Loop over collections
-- **state_machine**: Event-driven finite state machines
+- **checkpoint**: Let a long-running workflow continue as new with a fresh history
+- **state_machine**: Event-driven finite state machine
 - **rules_engine**: Declarative rule evaluation over a working memory of facts
+
+### Containers and control flow
+Tasks that run other tasks:
+- **tasks**: Run child tasks, sequentially or in parallel
+- **loop**: Run a task for each item of a collection, sequentially or in parallel
+- **branches**: if / elif / else
+- **switch**: Match one value against cases
 
 ## Expressions
 
 Expressions provide dynamic behavior using Python syntax:
 
 ```yaml
-# Simple expression
-total: "{{ price * quantity }}"
+- set:
+    # Simple expression
+    - total: '{{ price * quantity }}'
 
-# Complex expression with list comprehension
-result: "{{ sum([item['price'] for item in items]) }}"
+    # Complex expression with a comprehension
+    - result: '{{ sum(item["price"] for item in items) }}'
 
-# Conditional expression
-discount: "{{ price * 0.1 if price > 100 else 0 }}"
+    # Conditional expression
+    - discount: '{{ price * 0.1 if price > 100 else 0 }}'
 ```
 
-### Expression Types
+A value that is exactly one `{{ }}` keeps its type; text mixed with `{{ }}` becomes a string.
+
+### Evaluation modifiers
 - **python**: Standard Python evaluation (default)
 - **python_glom**: Path-based data extraction
 - **literal**: No evaluation, treat as string
@@ -94,15 +105,20 @@ discount: "{{ price * 0.1 if price > 100 else 0 }}"
 Activities are external functions or services that workflows can invoke:
 
 ```yaml
-- activity:
+- task_name: fetch-data
+  activity:
     type: http.request
-    input_data:
+    input:
       method: GET
       url: https://api.example.com/data
-    retry_policy:
-      timeout_sec: 30
-      max_attempts: 3
-    output_name: api_result
+      output_json: true
+    options:
+      retry_policy:
+        timeout_sec: 30
+        max_attempts: 3
+  output:
+    data: '{{ _["json"] }}'
+    as: api_result
 ```
 
 Moco ships activities for HTTP and GraphQL, shell commands, SQL, email, Kafka and RabbitMQ, Google
@@ -116,29 +132,33 @@ contract.
 Workflows maintain a context (variable store) throughout execution:
 
 - **Context**: Initial variables defined in the workflowspec
-- **Input Data**: Parameters passed when starting the workflow
-- **Output Data**: Values computed during execution
+- **Input**: Parameters passed when starting the workflow, over their declared defaults
+- **Task results**: Stored with `set`, or with a task's `output` (`set` / `data` / `as`)
 - **Special Variables**:
-  - `_`: Root context (all variables)
+  - `_`: The current task's raw result, inside its `output`
+  - `__context__`: A merged view of every visible variable
   - `__user_info__`: User information
   - `__sys_info__`: System info (workflow_id, trace_id, etc.)
-  - `iter_item`: Current item in iteration
-  - `iter_items`: All items in iteration
+  - a loop's `foreach` and `index` variables
 
 ### Variable Modifiers
 
 Control how variables are evaluated and stored:
 
 ```yaml
-# Container scope (temporary, not persisted)
-temp@: "{{ calculation() }}"
+- set:
+    # Task-local: discarded when the task ends
+    - _subtotal: '{{ quantity * unit_price }}'
 
-# Debug logging
-value#: "{{ important_data }}"
+    # Container scope: lives until the enclosing container or loop iteration ends
+    - temp@: '{{ _subtotal * 1.08 }}'
 
-# Force expression type
-template#literal: "{{ not_evaluated }}"
-path#python_glom: "data.nested.field"
+    # Debug logging
+    - value#: '{{ temp }}'
+
+    # Force an evaluation type
+    - template#literal: '{{ not_evaluated }}'
+    - first_dept#python_glom: '"people.0.dept"'
 ```
 
 ## Runtimes and Execute Modes
@@ -158,11 +178,11 @@ Workflows can communicate via events:
 ### Emitting Events
 ```yaml
 - emit_event:
-    input_data:
-      topic: notifications
-      data:
-        message: "Task complete"
-        result: "{{ result }}"
+    topic: notifications
+    event_type: task-complete
+    data:
+      message: Task complete
+      result: '{{ result }}'
 ```
 
 ### Waiting for Events
@@ -170,9 +190,10 @@ Workflows can communicate via events:
 - wait_for:
     event:
       topic: notifications
-      match_expression: "{{ event.data.get('id') == task_id }}"
+      match_expression: '{{ event["data"].get("id") == task_id }}'
     timeout_sec: 60
-    output_name: received_event
+  output:
+    as: received_event        # null on timeout
 ```
 
 Events enable:
@@ -185,20 +206,22 @@ Events enable:
 
 Workflows can execute other workflows, in one of four modes:
 
-- **inline** (default): Runs in the parent's context, sharing its variables
-- **sync**: Runs independently; the parent waits for the result
-- **async**: Runs independently; the parent waits only for it to start, and gets a `workflow_id`
+- **inline** (default): Runs in the parent's process as part of its execution
+- **sync**: Runs as a separate workflow; the parent waits for the result
+- **async**: Runs as a separate workflow; the parent waits only for it to start, and gets a `workflow_id`
 - **detached**: Runs completely independently, and outlives the parent
+
+A child always starts with a fresh context built from its `input`; it sees nothing of the parent's
+variables.
 
 ```yaml
 - workflow:
-    wfspec:
-      name: child-workflow
-      version: 1.0.0
-    child_mode: sync
-    input_data:
-      param: "{{ value }}"
-    output_name: child_result
+    ref: child-workflow
+    mode: sync
+    input:
+      param: '{{ value }}'
+  output:
+    as: child_result
 ```
 
 ## State Machines
@@ -206,19 +229,22 @@ Workflows can execute other workflows, in one of four modes:
 For complex event-driven workflows, use state machines:
 
 ```yaml
-state_machine:
-  name: order-fsm
-  initial_state: pending
-  states:
-    - name: pending
-    - name: processing
-    - name: completed
-      is_terminal: true
-  transitions:
-    - from_state: pending
-      to_state: processing
-      trigger:
-        event_type: start
+- state_machine:
+    initial_state: pending
+    states:
+      - name: pending
+      - name: processing
+      - name: completed
+        is_terminal: true
+    transitions:
+      - from_state: pending
+        to_state: processing
+        trigger:
+          event_type: start
+      - from_state: processing
+        to_state: completed
+        trigger:
+          event_type: done
 ```
 
 State machines provide:
@@ -255,6 +281,6 @@ State machines provide:
 
 **Looking something up**
 
-- [Statements Reference](../reference/statements.md)
+- [Tasks Reference](../reference/statements.md)
 - [Workflowspec Reference](../reference/workflowspec-reference.md)
 - [Activity Catalog](../reference/activity-catalog.md)

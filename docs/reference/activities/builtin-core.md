@@ -33,24 +33,22 @@ None.
 
 **Output**
 
-A `datetime` value (not an object with fields). Assign it with `output_name` and use it directly.
+A `datetime` value (not an object with fields). Store it with `output.as` and use it directly.
 
 **Example**
 
-From `moco-examples/moco-workflow-demo/src/activity-options-demo.yaml`:
-
 ```yaml
-- activity:
-    name: get-timestamp
+- task_name: get-timestamp
+  activity:
     type: builtin.now
-    output_name: started_at
-```
+  output:
+    as: started_at
 
-```yaml
-- transform:
-    output_data:
-      - run_label: "{{ started_at.strftime('%Y-%m-%d') }}"
-      - elapsed_sec: "{{ (finished_at - started_at).total_seconds() }}"
+# ... later
+- task_name: summarise-run
+  set:
+    - run_label: '{{ started_at.strftime("%Y-%m-%d") }}'
+    - elapsed_sec: '{{ (finished_at - started_at).total_seconds() }}'
 ```
 
 :::note Determinism
@@ -78,41 +76,45 @@ Pauses the workflow for a given duration.
 **Example**
 
 ```yaml
-- activity:
-    name: wait_5_seconds
-    description: Delay execution for 5 seconds
+- task_name: wait-5-seconds
+  activity:
     type: builtin.delay
-    input_data:
+    input:
       duration: 5s
 ```
 
-A polling loop:
+A polling loop — `raise: break` leaves the loop once the job is done:
 
 ```yaml
-- iteration:
-    input_data: "{{ range(max_polls) }}"
-    body:
-      sequence:
-        elements:
-          - activity:
-              type: http.request
-              input_data:
-                method: GET
-                url: "{{ status_url }}"
-                output_json: true
-              output_name: status
-          - abort:
-              condition: "{{ status['json']['state'] == 'done' }}"
-              type: break_iteration
-          - activity:
-              type: builtin.delay
-              input_data:
-                duration: 30s
+- task_name: poll-status
+  loop:
+    in: '{{ range(max_polls) }}'
+    do:
+      tasks:
+        - task_name: check-status
+          activity:
+            type: http.request
+            input:
+              method: GET
+              url: '{{ status_url }}'
+              output_json: true
+          output:
+            set:
+              - status: '{{ _["json"] }}'
+        - task_name: stop-when-done
+          raise:
+            if: '{{ status["state"] == "done" }}'
+            type: break
+        - task_name: wait-before-next-poll
+          activity:
+            type: builtin.delay
+            input:
+              duration: 30s
 ```
 
 :::note Long waits belong in `wait_for`
 `builtin.delay` holds an activity slot for its whole duration. To pause for hours or days, or
-until something happens, use a `wait_for` statement or a state machine instead — see
+until something happens, use a `wait_for` task or a state machine instead — see
 [Events](../../concepts/events.md).
 :::
 
@@ -122,20 +124,24 @@ until something happens, use a `wait_for` statement or a state machine instead �
 
 Runs an entire workflow **in memory, inside one activity**, using an embedded engine.
 
-Reach for it when a workflow moves large data between steps. On the Temporal runtime every
+Reach for it when a workflow moves large data between tasks. On the Temporal runtime every
 activity input and output crosses the wire and is capped at 2 MB; an embedded run keeps
 intermediate data in the worker's process, so neither limit nor marshalling cost applies.
 
-The trade is observability: steps inside the embedded workflow are not individual Temporal
-activities, so they get no per-step history and no per-step retry. The whole embedded run
+The trade is observability: tasks inside the embedded workflow are not individual Temporal
+activities, so they get no per-task history and no per-task retry. The whole embedded run
 succeeds or fails as one unit.
+
+For an ordinary child workflow, use the [`workflow` task](../statements.md#workflow) instead.
+This activity is the lower-level alternative: the spec to run is resolved when the activity runs,
+so it can be picked from data — a name held in a variable, or YAML generated at runtime.
 
 **Input**
 
 | Field | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
 | `wfspec` | [WorkflowSpecInfo](#workflowspecinfo) | yes | — | Which workflow to run |
-| `input_data` | any | no | `null` | Input passed to that workflow |
+| `input_data` | any | no | `null` | Input passed to that workflow; it becomes the embedded workflow's `input` |
 | `options` | [WorkflowExecuteOptions](#workflowexecuteoptions) | no | `null` | Execution options |
 
 #### WorkflowSpecInfo
@@ -145,9 +151,9 @@ Identify a deployed workflow by `name` (plus optional `version`), **or** supply 
 
 | Field | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
-| `name` | str | no | `null` | Name of a deployed workflowspec |
+| `name` | str | no | `null` | Name of a deployed wfspec |
 | `version` | str | no | latest | Version to run |
-| `content` | str \| list[str] | no | `null` | The workflowspec YAML itself |
+| `content` | str \| list[str] | no | `null` | The wfspec YAML itself — a complete document with `header` and `main`. With a list, item 0 is the entry point |
 
 #### WorkflowExecuteOptions
 
@@ -160,7 +166,6 @@ The commonly used fields; all are optional.
 | `trace_id` | str | Correlate the embedded run with the caller's trace |
 | `workflow_id` | str | Identifier for the embedded run |
 | `tier` | str | Execution tier |
-| `child_mode` | str | How the run relates to its parent |
 | `execute_mode` | str | `in-memory`, `standalone-activity` or `workflow` |
 | `retry_policy` | dict | Timeout and retry settings for the embedded run |
 | `enable_otel_trace` | bool | Emit OpenTelemetry spans |
@@ -169,39 +174,68 @@ The commonly used fields; all are optional.
 
 The embedded workflow's own output, unchanged.
 
-**Example**
+**Examples**
 
-From `moco-examples/trade-simulator/src/single-security-monitor.yaml`:
+Running a deployed spec by name:
 
 ```yaml
-- activity:
-    name: run-signal-analysis
+- task_name: run-signal-analysis
+  activity:
     type: builtin.execute_workflow
-    input_data:
+    input:
       wfspec:
         name: multi-timeframe-trading-signal
       input_data:
-        symbol: "{{ symbol }}"
-        confluence_threshold: "{{ confluence_threshold }}"
-        hourly_prices: "{{ hist_candles }}"
-    output_name: last_result
+        symbol: '{{ symbol }}'
+        confluence_threshold: '{{ confluence_threshold }}'
+        hourly_prices: '{{ hist_candles }}'
+  output:
+    as: last_result
 ```
 
-Running an inline spec:
+Running an inline spec. The `#literal` modifier keeps the embedded document's `{{ }}`
+expressions from being evaluated by the caller; they run inside the embedded workflow:
 
 ```yaml
-- activity:
-    name: run-generated-spec
+header:
+  schema_version: 2.0.0
+  workflow_name: run-embedded-sum
+
+context:
+  summing_child#literal: |
+    header:
+      schema_version: 2.0.0
+      workflow_name: embedded-sum
+    input:
+      numbers: []
+    output:
+      count: '{{ len(numbers) }}'
+      total: '{{ sum(numbers) }}'
+    main:
+      set: []
+
+input:
+  numbers: [3, 4, 5]
+
+output: '{{ result }}'
+
+main:
+  task_name: run-inline-child
+  activity:
     type: builtin.execute_workflow
-    input_data:
+    input:
       wfspec:
-        content: "{{ generated_yaml }}"
+        content: '{{ summing_child }}'
       input_data:
-        rows: "{{ dataset }}"
+        numbers: '{{ numbers }}'
       options:
-        catch_exception: true
-    output_name: result
+        catch_exception: true     # a failing child comes back as data
+  output:
+    as: result
 ```
+
+A complete example, including a spec chosen at runtime, is in
+`moco-examples-v2/activities/builtin-execute-workflow.yaml`.
 
 :::note What the embedded workflow can call
 It sees the activities of the worker it runs on. On the base worker that is the core provider set;

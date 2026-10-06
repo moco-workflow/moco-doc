@@ -86,11 +86,11 @@ moco logout                          # clear tokens and cached session
 
 ## 2. Run the examples
 
-The example workflows live in the [build-my-workflow](https://github.com/build-my-workflow)
+The example workflows live in the [moco-workflow](https://github.com/moco-workflow)
 GitHub organization. Clone the examples repository and run one:
 
 ```bash
-git clone https://github.com/build-my-workflow/moco-examples.git
+git clone https://github.com/moco-workflow/moco-examples.git
 cd moco-examples/moco-workflow-demo
 
 moco validate src/sequence-demo.yaml
@@ -154,49 +154,55 @@ mkdir -p hello-moco/src && cd hello-moco
 ```
 
 Save this as `src/hello-moco.yaml`. It calls a public HTTP API and turns the response into a
-one-line summary:
+short summary:
 
 ```yaml
-wfspec_name: hello-moco
-wfspec_version: 1.0.0
+header:
+  schema_version: 2.0.0
+  workflow_name: hello-moco
 
-input_data:
+input:
   owner: temporalio
   repo: temporal
 
-output_name: summary
+output: '{{ summary }}'
 
-body:
-  sequence:
-    elements:
-      # Call an external API
-      - activity:
-          name: fetch-repo
-          type: http.request
-          input_data:
-            method: GET
-            url: 'https://api.github.com/repos/{{ owner }}/{{ repo }}'
-            output_json: true
-          output_data:
-            - repo_info: '{{ _raw_output.get("json", {}) }}'
+main:
+  tasks:
+    # Call an external API
+    - task_name: fetch-repo
+      activity:
+        type: http.request
+        input:
+          method: GET
+          url: 'https://api.github.com/repos/{{ owner }}/{{ repo }}'
+          output_json: true
+      output:
+        data: '{{ _.get("json", {}) }}'
+        as: repo_info
 
-      # Shape the result
-      - transform:
-          name: build-summary
-          output_data:
-            - summary:
-                name: '{{ repo_info.get("full_name") }}'
-                stars: '{{ repo_info.get("stargazers_count", 0) }}'
-                description: '{{ repo_info.get("description") }}'
+    # Shape the result
+    - task_name: build-summary
+      set:
+        - summary:
+            name: '{{ repo_info.get("full_name") }}'
+            stars: '{{ repo_info.get("stargazers_count", 0) }}'
+            description: '{{ repo_info.get("description") }}'
 ```
 
 A few things to notice:
 
-- `body` holds one statement. Here it is a `sequence`, which runs its `elements` in order.
-- `activity` performs work against the outside world; `transform` only reshapes workflow data.
-- Anything inside `{{ }}` is a sandboxed Python expression evaluated against the workflow's data
-  context. `_raw_output` is the activity's raw response.
-- `output_name` names the context variable returned as the workflow result.
+- `header` names the workflow. Its version comes from the package you publish it in (step 4), so
+  the file itself carries none.
+- `input` declares the parameters and their defaults; the caller's values win.
+- `main` holds one **task**. Here it is a `tasks` container, which runs its children in order.
+- Each task has exactly one **kind**: `activity` performs work against the outside world, `set`
+  only assigns variables. `task_name` is optional, but it names the task in logs and lets tests
+  mock it.
+- Anything inside `{{ }}` is a sandboxed Python expression. Inside a task's `output`, `_` is what
+  the task returned — here the HTTP response. `output.data` reshapes it and `output.as` stores the
+  result in the variable `repo_info`.
+- The top-level `output` is evaluated after `main` finishes and becomes the workflow result.
 
 Validate and run it:
 
@@ -206,16 +212,29 @@ moco run src/hello-moco.yaml
 moco run src/hello-moco.yaml --input '{"owner": "python", "repo": "cpython"}'
 ```
 
+```
+✓ Workflow executed successfully
+
+Result:
+{
+  "name": "python/cpython",
+  "stars": 77489,
+  "description": "The Python programming language"
+}
+```
+
 ### Debugging tip: the `#` modifier
 
 Append `#` to a variable name and its evaluated value is streamed back to your terminal during
 execution — the fastest way to see what an expression actually produced:
 
 ```yaml
-- transform:
-    output_data:
-      - stars#: '{{ repo_info.get("stargazers_count", 0) }}'
+- task_name: build-summary
+  set:
+    - stars#: '{{ repo_info.get("stargazers_count", 0) }}'
 ```
+
+It works anywhere a variable is written, including `output.as: repo_info#`.
 
 Traces from child workflows are collected automatically. When running a *deployed* workflow, add
 `--debug` to print them.
@@ -237,8 +256,9 @@ A published unit is a **package**: one or more wfspec files versioned together. 
 }
 ```
 
-The package needs an entry point: one source file whose `wfspec_name` equals
+The package needs an entry point: one source file whose `header.workflow_name` equals
 `wfspec_package_name` (here, `hello-moco.yaml`). The others are child workflows it can reference.
+Every workflow in the package takes the package's version, `wfspec_package_version`.
 
 Preview, then publish to your working namespace:
 
@@ -302,7 +322,8 @@ The console also manages **secrets** (encrypted values referenced from workflows
 
 - [Core Concepts](./concepts/overview.md) — how Moco models workflows
 - [Workflowspec](./concepts/workflowspec.md) — structure of a spec
-- [Statements](./reference/statements.md) — `sequence`, `parallel`, `iteration`, `state_machine`, and more
+- [Tasks](./reference/statements.md) — `tasks`, `loop`, `branches`, `switch`, `state_machine`, and more
+- [Writing Workflows](./guides/writing-workflows.md) — build a workflow step by step
 - [Expressions](./concepts/expressions.md) — the `{{ }}` expression language
 - [Activities](./concepts/activities.md) — HTTP, Kafka, shell, S3, OpenAI, MCP, and custom activities
 - [State Machines](./concepts/state-machines.md) — event-driven and human-in-the-loop workflows

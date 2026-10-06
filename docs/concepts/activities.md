@@ -24,45 +24,44 @@ Activities allow you to:
 - Perform complex calculations
 - Integrate with third-party services
 
-## Basic Activity Usage
+## Calling an activity
+
+An `activity` task names the activity type, gives it an `input`, and optionally sets `options`. Its
+`output` decides what to keep from the result:
 
 ```yaml
-- activity:
-    type: http.request      # Activity type identifier
-    input_data:                      # Input parameters
+- task_name: fetch-user                  # names the task in traces; needed to mock it in tests
+  activity:
+    type: http.request                   # activity type identifier
+    input:                               # evaluated each time the task runs
       method: GET
-      url: https://api.example.com/users/123
-    output_name: user_data           # Store result
-    retry_policy:                    # Timeout & retry (Temporal runtime only)
-      timeout_sec: 30                # Per-attempt execution timeout
-      max_attempts: 3               # Total attempts (initial + retries)
+      url: 'https://api.example.com/users/{{ user_id }}'
+      output_json: true
+    options:
+      retry_policy:                      # timeout and retry (Temporal runtime only)
+        timeout_sec: 30                  # per-attempt execution timeout
+        max_attempts: 3                  # total attempts (initial + retries)
+  output:
+    data: '{{ _["json"] }}'              # `_` is the activity's output
+    as: user
 ```
 
-## Activity Parameters
+### Activity fields
 
-### Required
+| Field | Type | Description |
+|-------|------|-------------|
+| `type` | string | **Required.** Activity type identifier, e.g. `http.request` |
+| `input` | mapping | The activity's input, evaluated each time the task runs. Its fields are the activity's input contract in the [Activity Catalog](../reference/activity-catalog.md) |
+| `options.retry_policy` | mapping | Timeout and retry policy, laid over the workflow's default. See [Retry and Timeout](#retry-and-timeout) |
+| `options.execute_locally` | bool | Run in the workflow's process instead of on a worker. Overrides the activity's own default. See [Local Execution](#local-execution) |
+| `options.enable_cache` | bool | Reuse a stored result for identical input. See [Caching](#caching) |
+| `options.cache_policy` | mapping | `expire_in_seconds`, `disable` |
+| `options.async_mode` | bool | Start the activity and continue without waiting. See [`async_mode`](#fire-and-forget-async_mode) |
+| `options.async_event_topic` | string | Topic the completion event is published to in `async_mode` (default: `default`) |
 
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `type` | string | Activity type identifier (e.g., "http.request") |
-
-### Optional
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `version` | string | Activity version (default: "1.0.0") |
-| `config_data` | dict | Static configuration (evaluated once) |
-| `input_data` | dict | Dynamic input (evaluated per execution) |
-| `output_name` | string | Variable to store activity result |
-| `output_data` | list | Transform result before storing |
-| `retry_policy` | dict | Nested timeout/retry config (Temporal only): `timeout_sec` (per-attempt execution timeout), `schedule_to_close_timeout_sec`, `heartbeat_timeout_sec`, `heartbeat_interval_sec` (heartbeat cadence; heartbeating is enabled only when both `heartbeat_timeout_sec` and `heartbeat_interval_sec` are set), `max_attempts` (total attempts = initial + retries), `initial_interval_sec`, `backoff_coefficient`, `maximum_interval_sec`, `non_retryable_error_types` |
-| `execute_locally` | boolean | Force local execution (bypass Temporal). Overrides the activity's own default — see [Local Execution](#local-execution) |
-| `enable_cache` | boolean | Enable result caching |
-| `cache_policy` | dict | Cache configuration |
-| `async_mode` | boolean | Start the activity and continue without waiting — see [`async_mode`](#fire-and-forget-async_mode) |
-| `async_event_topic` | string | Topic the completion event is published to when `async_mode` is set (default: `default`) |
-| `name` | string | Names the step. Required to mock it in a [test](../guides/testing.md#mocking) |
-| `condition` | expression | Skip the activity when this is falsy |
+Like every task, an activity task also takes the shared keys: `task_name`, `skip_if` (skip it when a
+condition is true), `output` and `on_error`. See
+[Workflowspec Structure](./workflowspec.md#tasks).
 
 ## Built-in Activities
 
@@ -80,31 +79,37 @@ Make HTTP requests to external APIs — see [HTTP Activities](../reference/activ
 
 ```yaml
 # GET request
-- activity:
+- task_name: list-data
+  activity:
     type: http.request
-    input_data:
+    input:
       method: GET
       url: https://api.example.com/data?limit=10&offset=0
       headers:
         Accept: application/json
       output_json: true
-    output_name: api_response
-    retry_policy:
-      timeout_sec: 30
+    options:
+      retry_policy:
+        timeout_sec: 30
+  output:
+    as: api_response           # {status_code, is_success, headers, json}
 ```
 
 ```yaml
 # POST request with JSON body
-- activity:
+- task_name: create-order
+  activity:
     type: http.request
-    input_data:
+    input:
       method: POST
       url: https://api.example.com/orders
       json_data:
-        order_id: "{{ order_id }}"
-        items: "{{ items }}"
-        total: "{{ total }}"
-    output_name: create_response
+        order_id: '{{ order_id }}'
+        items: '{{ items }}'
+        total: '{{ total }}'
+      raise_for_status: true   # fail the task on a 4xx/5xx response
+  output:
+    as: create_response
 ```
 
 ### Delay
@@ -114,7 +119,7 @@ Pause workflow execution — see [Built-in Core](../reference/activities/builtin
 ```yaml
 - activity:
     type: builtin.delay
-    input_data:
+    input:
       duration: 5s      # seconds: 5s, minutes: 5min, hours: 1h30m
 ```
 
@@ -125,22 +130,25 @@ Store and retrieve values that outlive a single run — see
 
 ```yaml
 # Save state
-- activity:
+- task_name: save-preferences
+  activity:
     type: builtin.state.set_state
-    input_data:
-      namespace: "user-preferences"
-      key: "{{ user_id }}"
+    input:
+      namespace: user-preferences
+      key: '{{ user_id }}'
       value:
         theme: dark
         notifications: true
 
 # Load state
-- activity:
+- task_name: load-preferences
+  activity:
     type: builtin.state.get_state
-    input_data:
-      namespace: "user-preferences"
-      key: "{{ user_id }}"
-    output_name: preferences
+    input:
+      namespace: user-preferences
+      key: '{{ user_id }}'
+  output:
+    as: preferences
 ```
 
 ### Secret Management
@@ -153,18 +161,41 @@ example `openai.chat.completions.apikey_secret_key`, `email.send.password_secret
 internally, so nothing sensitive touches workflow context at all. A bare `NAME` resolves a
 user-scoped secret; `global/NAME` resolves a global one.
 
+```yaml
+- task_name: load-order
+  activity:
+    type: sql.query
+    input:
+      connection_string_secret_key: ANALYTICS_DB      # a secret name, not the secret
+      query: SELECT * FROM orders WHERE id = :order_id
+      parameters:
+        order_id: '{{ order_id }}'
+  output:
+    as: rows
+```
+
 Where an activity does not yet support that (for example `http.request.encrypted_auth_token`), use
-`builtin.secret.get`, which returns the secret **still encrypted** — pass that blob straight to the
+`builtin.secret.get`, which returns the secret **still encrypted** — pass that value straight to the
 activity, which decrypts it internally.
 
 ```yaml
-- activity:
+- task_name: get-token
+  activity:
     type: builtin.secret.get
-    input_data:
-      secret_name: database_password
+    input:
+      secret_name: api_token
       in_global_ns: false      # optional; true reads the shared global namespace
       expiration_seconds: 60   # optional; defaults to 60
-    output_name: db_password
+  output:
+    as: api_token
+
+- task_name: call-api
+  activity:
+    type: http.request
+    input:
+      method: GET
+      url: https://api.example.com/me
+      encrypted_auth_token: '{{ api_token }}'
 ```
 
 The returned secret **expires after `expiration_seconds`**, so a long-running workflow must re-run
@@ -179,8 +210,7 @@ autonomous multi-turn agent with explicitly granted tools; the `llama_index.*` a
 query a vector index over your own documents so an LLM can answer from them. See
 [OpenAI](../reference/activities/openai.md),
 [Claude Agent](../reference/activities/claude-agent.md) and
-[LlamaIndex](../reference/activities/llama-index.md), with runnable examples in
-`moco-examples/openai-demo/`, `moco-examples/claude-agent-demo/` and `moco-examples/rag-demo/`.
+[LlamaIndex](../reference/activities/llama-index.md).
 
 ### Files, messaging and browsers
 
@@ -191,107 +221,188 @@ query a vector index over your own documents so an LLM can answer from them. See
 [Kafka](../reference/activities/kafka.md), [RabbitMQ](../reference/activities/rabbit.md) and
 [Playwright](../reference/activities/playwright.md).
 
-## Config vs Input Data
+## Input
 
-Activities support two types of parameters:
-
-### config_data (Static)
-
-Evaluated once at workflow start. Use for:
-- API endpoints
-- Credentials
-- Fixed configuration
+`input` is evaluated every time the task runs, so expressions in it see the current values — a
+different item on each loop iteration, for example:
 
 ```yaml
-- activity:
-    type: sql.query
-    config_data:
-      connection_string_secret_key: ANALYTICS_DB      # same every run
-    input_data:
-      query: "SELECT * FROM orders WHERE id = {{ order_id }}"
-```
-
-Note what is *not* in `config_data`: the connection string itself. Credentials are referenced by
-secret key and resolved inside the activity — see [Secret Management](#secret-management).
-
-### input_data (Dynamic)
-
-Evaluated each time the activity executes. Use for:
-- Request parameters
-- Data to process
-- Dynamic values
-
-```yaml
-- iteration:
-    input_data: "{{ user_ids }}"
-    body:
+- task_name: fetch-each-user
+  loop:
+    in: '{{ user_ids }}'
+    foreach: user_id
+    do:
+      task_name: fetch-user
       activity:
-        type: fetch.user
-        config_data:
-          api_base: https://api.example.com
-        input_data:
-          user_id: "{{ iter_item }}"  # Different each iteration
-        output_name: user
+        type: http.request
+        input:
+          method: GET
+          url: 'https://api.example.com/users/{{ user_id }}'   # different each iteration
+          output_json: true
+      output:
+        data: '{{ _["json"] }}'
+  output:
+    as: users                  # one result per user, in order
 ```
+
+Values that never change go in `input` too, written as plain values. Credentials never do: pass a
+secret key, as in [Secret Management](#secret-management).
+
+## Shaping the result
+
+Inside the task's `output`, `_` is the activity's output. Keep only what later tasks need:
+
+```yaml
+- task_name: list-users
+  activity:
+    type: http.request
+    input:
+      method: GET
+      url: https://api.example.com/users
+      output_json: true
+  output:
+    set:
+      - _users: '{{ _["json"] }}'                       # task-local
+      - user_count: '{{ len(_users) }}'                 # written to the context
+    data:
+      users: '{{ _users }}'
+      first_user: '{{ _users[0] if _users else None }}'
+    as: result                                          # {users: [...], first_user: {...}}
+```
+
+`output.set` writes individual variables, `output.data` builds the task's result, and `output.as`
+stores that result. Without `output`, the activity's output is the task's result but is not stored
+anywhere. See [Workflowspec Structure](./workflowspec.md#a-tasks-result-_-and-output).
 
 ## Retry and Timeout
 
-### Timeout
-
-Set maximum execution time:
-
-```yaml
-- activity:
-    type: http.request
-    input_data:
-      url: https://slow-api.com/data
-    retry_policy:
-      timeout_sec: 10   # Timeout after 10 seconds
-    output_name: result
-```
-
-### Retry
-
-Configure automatic retries on failure:
+An activity's effective retry policy is the workflow's default,
+`header.metadata.default_activity_retry_policy`, with the activity's own `options.retry_policy`
+laid over it field by field:
 
 ```yaml
-- activity:
+header:
+  schema_version: 2.0.0
+  workflow_name: resilient-fetch
+  metadata:
+    default_activity_retry_policy:     # every activity starts from this
+      max_attempts: 3
+      initial_interval_sec: 1
+      timeout_sec: 60
+
+main:
+  task_name: fetch-data
+  activity:
     type: http.request
-    input_data:
-      url: https://unreliable-api.com/data
-    retry_policy:
-      max_attempts: 5          # Total attempts (initial + retries)
-      timeout_sec: 10          # Per-attempt timeout
-    output_name: result
+    input:
+      method: GET
+      url: https://unreliable-api.example.com/data
+      raise_for_status: true
+    options:
+      retry_policy:                    # overrides max_attempts and timeout_sec;
+        max_attempts: 5                # initial_interval_sec is inherited
+        timeout_sec: 10
+  output:
+    as: result
 ```
+
+| Field | Description |
+|---|---|
+| `timeout_sec` | Per-attempt execution timeout |
+| `schedule_to_close_timeout_sec` | Overall limit across all attempts, including waiting in the queue |
+| `heartbeat_timeout_sec` | Fail an attempt that stops heartbeating for this long |
+| `heartbeat_interval_sec` | Heartbeat cadence. Heartbeating is enabled only when both heartbeat fields are set |
+| `max_attempts` | Total attempts (initial + retries). `0` means unlimited |
+| `initial_interval_sec` | Wait before the first retry |
+| `backoff_coefficient` | Multiplier applied to the wait after each retry |
+| `maximum_interval_sec` | Upper bound on the wait between retries |
+| `non_retryable_error_types` | Error types that fail immediately, without retrying |
 
 Retry behavior:
 - Initial attempt + retries = total attempts
 - Exponential backoff between retries
-- Failures are logged
-- Final failure propagates to workflow
+- Only the final failure reaches the workflow, where `on_error` can handle it
+- Retry policies apply on the Temporal runtime only; the in-memory runtime makes one attempt (see
+  [Runtimes](./dual-runtime.md))
+
+## Handling failure
+
+When an activity fails after its retries, the task fails. Handle it with `on_error`; inside `do`,
+`_` is the error, `{error_type, error_message, error_detail}`:
+
+```yaml
+- task_name: fetch-rates
+  activity:
+    type: http.request
+    input:
+      method: GET
+      url: https://rates.example.com/latest
+      output_json: true
+      raise_for_status: true
+  output:
+    data: '{{ _["json"] }}'
+    as: rates
+  on_error:
+    catch: true                        # consume the error; the task's `output` is skipped
+    do:
+      set:
+        - rates: '{{ fallback_rates }}'
+        - rates_error#: '{{ _["error_message"] }}'
+```
+
+With `catch: false` (the default), `do` runs as a cleanup step and the error keeps propagating to
+the parent task. An activity that reports failure in its output rather than failing — an HTTP 4xx
+without `raise_for_status`, a shell command's non-zero `return_code` — does not reach `on_error`.
+Check the output and `raise` yourself:
+
+```yaml
+- task_name: run-report
+  activity:
+    type: shell.run
+    input:
+      command: ./build-report.sh
+  output:
+    as: report
+
+- task_name: check-report
+  raise:
+    if: '{{ report["return_code"] != 0 }}'
+    type: error
+    error_type: ReportFailed
+    message: 'report failed: {{ report["stderr"] }}'
+```
 
 ## Caching
 
 Enable caching to avoid redundant executions:
 
 ```yaml
-- activity:
+- task_name: load-reference-data
+  activity:
     type: http.request
-    input_data:
+    input:
+      method: GET
       url: https://api.example.com/reference-data
-    enable_cache: true
-    cache_policy:
-      ttl_seconds: 3600           # Cache for 1 hour
-      cache_key: "ref-data-{{ date }}"
-    output_name: cached_data
+      output_json: true
+    options:
+      enable_cache: true
+      cache_policy:
+        expire_in_seconds: 3600       # reuse the result for 1 hour
+  output:
+    as: reference_data
 ```
+
+The cache key is the activity type together with its evaluated input, stored per user, so a call
+with the same input reuses the stored result and a call with different input runs the activity.
+Without `expire_in_seconds` a cached result does not expire. Setting `cache_policy` alone also
+enables caching; `enable_cache: false` or `cache_policy.disable: true` turns it off. State
+activities (`builtin.state.*`) and `async_mode` activities are never cached.
 
 **Cache benefits:**
 - Reduce API calls
 - Improve performance
 - Lower costs
-- Consistent data within TTL
+- Consistent data within the expiry window
 
 ## Local Execution
 
@@ -300,9 +411,10 @@ Force activities to run in the workflow process (bypass Temporal workers):
 ```yaml
 - activity:
     type: builtin.delay
-    input_data:
+    input:
       duration: 1s
-    execute_locally: true    # Run in workflow process
+    options:
+      execute_locally: true    # run in the workflow process
 ```
 
 **Use for:**
@@ -342,67 +454,48 @@ Conversely, an activity served by a *different* worker type can never run locall
 [`claude_agent.query`](../reference/activities/claude-agent.md) is the only one today: it runs on
 the `agent` worker, so `execute_locally` has no effect on it.
 
-## Output Transformation
-
-Transform activity results before storing:
-
-```yaml
-- activity:
-    type: http.request
-    input_data:
-      url: https://api.example.com/users
-    output_data:
-      - users: "{{ _raw_output }}"           # Raw response
-      - user_count: "{{ len(users) }}"       # Derived value
-      - first_user: "{{ users[0] if users else None }}"
-    output_name: result
-```
-
-The transformed data is stored in `result`:
-```python
-{
-  "users": [...],
-  "user_count": 5,
-  "first_user": {...}
-}
-```
-
 ## Fire-and-forget: `async_mode`
 
 By default a workflow waits for each activity to finish. Set `async_mode: true` and it starts the
 activity and moves on:
 
 ```yaml
-- activity:
-    name: slow_report
+- task_name: slow-report
+  activity:
     type: shell.run
-    async_mode: true
-    input_data:
+    input:
       command: ./build-report.sh
-    output_name: report_token
+    options:
+      async_mode: true
+  output:
+    as: report_token
 ```
 
-The activity's "output" is immediately a **token** string, not the result. Later — possibly much
-later, possibly in a different branch — you collect the real result by waiting for an event whose
-type is that token:
+The activity's output (`_`) is immediately a **token** string, not the result. Later — possibly
+much later, possibly in a different branch — you collect the real result by waiting for an event
+whose type is that token:
 
 ```yaml
-- wait_for:
+- task_name: await-report
+  wait_for:
     event:
-      event_type: "{{ report_token }}"
-    output_name: report
+      event_type: '{{ report_token }}'
+    timeout_sec: 600
+  output:
+    as: report                 # the completion event, or null on timeout
 ```
 
 The token is unique per invocation, so the same activity running in a loop or a re-entered state
-never collides with itself. Event metadata carries `status` (`completed` or `failed`), `error`, and
-the activity name and run ID.
+never collides with itself. The event's `data` is the activity's output, and its metadata carries
+`status` (`completed` or `failed`), `error`, and the activity name and run ID.
 
 Point `async_event_topic` at a state machine's `event_source_topic` and the activity's completion
 drives a transition directly — the usual way to let slow work advance an event-driven workflow.
+When you set `async_event_topic`, wait on that `topic` too.
 
 Waiting is optional: ignoring the token is plain fire-and-forget. Two caveats, though. A completion
 event is consumed by the first matching waiter, and in-flight completions do not survive a
-`continue_as_new_checkpoint`. And an activity still running when the workflow completes is
+`checkpoint` that continues as new. And an activity still running when the workflow completes is
 cancelled — for work that must outlive the workflow, use a detached child workflow instead.
 
 ## What if no built-in activity fits?
@@ -416,7 +509,7 @@ worth checking before concluding it does not. In particular:
 - `mcp.*` calls tools on an MCP server
 
 Between them, most "I need a custom activity" cases turn out to be an HTTP call. Wrapping that call
-in a child workflow gives you a named, versioned, reusable unit that other workflows can compose —
+in a child workflow gives you a named, reusable unit that other workflows can compose —
 usually a better answer than new platform code, because you can release it yourself.
 
 When you genuinely need a new activity type in the platform — a new protocol, a native SDK, or
@@ -425,24 +518,29 @@ documented for platform developers in `moco-core/docs/creating-activity-provider
 
 ## Activity Best Practices
 
-### Error Handling
+### Give Every Call a Timeout
+
+Set a workflow-wide default in `header.metadata.default_activity_retry_policy`, then override it
+where an activity is unusually fast or slow:
 
 ```yaml
-# Provide meaningful timeout
+# Fast operations
 - activity:
-    type: external.api
-    input_data:
-      url: "{{ endpoint }}"
-    retry_policy:
-      timeout_sec: 30
-      max_attempts: 3
-    output_name: result
+    type: builtin.delay
+    input:
+      duration: 1s
+    options:
+      retry_policy:
+        timeout_sec: 2
 
-# Check for errors
-- abort:
-    condition: "{{ not result.success }}"
-    type: raise
-    message: "API call failed: {{ result.error }}"
+# Slow operations
+- activity:
+    type: shell.run
+    input:
+      command: './process-large-file.sh {{ file }}'
+    options:
+      retry_policy:
+        timeout_sec: 300      # 5 minutes
 ```
 
 ### Assume Activities Can Run Twice
@@ -454,68 +552,41 @@ With `max_attempts` above 1, a retried activity runs again — and a transient f
 # Safer: PUT is idempotent, the same call twice leaves the same state
 - activity:
     type: http.request
-    input_data:
+    input:
       method: PUT
-      url: "https://api.example.com/orders/{{ order_id }}"
-      json_data: "{{ order }}"
-    retry_policy:
-      max_attempts: 3
+      url: 'https://api.example.com/orders/{{ order_id }}'
+      json_data: '{{ order }}'
+    options:
+      retry_policy:
+        max_attempts: 3
 
 # Riskier: POST may create two orders. Send an idempotency key, or set max_attempts: 1
 - activity:
     type: http.request
-    input_data:
+    input:
       method: POST
       url: https://api.example.com/orders
       headers:
-        Idempotency-Key: "{{ order_id }}"
-      json_data: "{{ order }}"
-    retry_policy:
-      max_attempts: 3
+        Idempotency-Key: '{{ order_id }}'
+      json_data: '{{ order }}'
+    options:
+      retry_policy:
+        max_attempts: 3
 ```
 
-### Use config_data for Static Values
+### Fail Loudly
 
-```yaml
-# Good: what never varies goes in config_data
-- activity:
-    type: http.request
-    config_data:
-      base_url: https://api.example.com
-    input_data:
-      path: "/users/{{ user_id }}"   # varies per execution
+Prefer an activity that fails (`raise_for_status: true` on `http.request`) over one that returns an
+error you might forget to check. A failure is retried, and it is visible to `on_error`.
 
-# Bad: everything in input_data, re-evaluated every call
-- activity:
-    type: http.request
-    input_data:
-      base_url: https://api.example.com   # same every time
-      path: "/users/{{ user_id }}"
-```
+### Keep Only What You Need
 
-### Appropriate Timeouts
-
-```yaml
-# Fast operations
-- activity:
-    type: builtin.delay
-    input_data:
-      duration: 1s
-    retry_policy:
-      timeout_sec: 2
-
-# Slow operations
-- activity:
-    type: data.process_large_file
-    input_data:
-      file_path: "{{ file }}"
-    retry_policy:
-      timeout_sec: 300      # 5 minutes
-```
+Use `output` to store the fields later tasks read, not the whole response. Everything in the
+context is carried for the rest of the run, into child workflow results and checkpoints.
 
 ## Next Steps
 
 - [Activity Catalog](../reference/activity-catalog.md) — every activity, by provider
-- [Statements Reference](../reference/statements.md) — the `activity` statement's full field list
-- [State Machines Reference](./state-machines.md)
-- [Events Reference](./events.md)
+- [Tasks Reference](../reference/statements.md) — the `activity` task's full field list
+- [State Machines](./state-machines.md)
+- [Events](./events.md)

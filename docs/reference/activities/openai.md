@@ -7,8 +7,8 @@ sidebar_label: OpenAI
 One activity, `openai.chat.completions`, sends a chat completion request to any OpenAI-compatible
 endpoint and returns the assistant's message.
 
-Use it for a single prompt-and-response step: classify something, extract fields, draft text. When
-the step is open-ended enough that you cannot specify it in advance, use
+Use it for a single prompt-and-response task: classify something, extract fields, draft text. When
+the work is open-ended enough that you cannot specify it in advance, use
 [`claude_agent.query`](./claude-agent.md) instead — an agent loop reasons over several turns and
 calls tools on its own.
 
@@ -36,7 +36,7 @@ The same rule applies to [`llama_index`](./llama-index.md) model blocks.
 ## Defaults
 
 60 s timeout, 3 attempts — the platform default, and **short for a real completion**. Raise
-`timeout_sec` for anything longer than a sentence or two, and consider lowering `max_attempts`:
+`options.retry_policy.timeout_sec` for anything longer than a sentence or two, and consider lowering `max_attempts`:
 three attempts means paying for the generation up to three times.
 
 Applied inside the activity when you do not set them: `max_tokens: 8000`, `temporature: 0.1`.
@@ -93,16 +93,13 @@ The assistant's message:
 
 **Examples**
 
-Structured output, from `moco-examples/openai-demo/src/openai-demo.yaml`:
+Structured output, parsed in the task's `output`:
 
 ```yaml
-- activity:
+- task_name: generate_reminders
+  activity:
     type: openai.chat.completions
-    name: generate_reminders
-    retry_policy:
-      timeout_sec: 120
-      max_attempts: 2
-    input_data:
+    input:
       apikey_secret_key: "{{ llm_apikey_secret_key }}"
       base_url: "{{ llm_base_url }}"
       model_name: "{{ llm_model_name }}"
@@ -117,22 +114,22 @@ Structured output, from `moco-examples/openai-demo/src/openai-demo.yaml`:
             writes short, actionable reminders for the day.
         - role: user
           content: "{{ forecast_text }}"
-    output_name: reminders
-```
-
-```yaml
-- transform:
-    output_data:
-      - parsed: "{{ json.loads(reminders['content']) }}"
+    options:
+      retry_policy:
+        timeout_sec: 120
+        max_attempts: 2
+  output:
+    data: '{{ json.loads(_["content"]) }}'    # `_` is the assistant message
+    as: reminders
 ```
 
 Asking the model to pick a tool:
 
 ```yaml
-- activity:
-    name: route-request
+- task_name: route-request
+  activity:
     type: openai.chat.completions
-    input_data:
+    input:
       apikey_secret_key: "MY_LLM_TOKEN"
       model_name: "{{ llm_model_name }}"
       messages:
@@ -149,14 +146,15 @@ Asking the model to pick a tool:
                 order_id: {type: string}
               required: [order_id]
       tool_choice: auto
-    retry_policy:
-      timeout_sec: 120
-    output_name: routing
-
-- transform:
-    condition: "{{ routing['tool_calls'] }}"
-    output_data:
-      - order_id: "{{ json.loads(routing['tool_calls'][0]['function']['arguments'])['order_id'] }}"
+    options:
+      retry_policy:
+        timeout_sec: 120
+  output:
+    set:
+      - routing: '{{ _ }}'
+      - order_id: >-
+          {{ json.loads(_["tool_calls"][0]["function"]["arguments"])["order_id"]
+             if _["tool_calls"] else None }}
 ```
 
 :::note Streaming is internal

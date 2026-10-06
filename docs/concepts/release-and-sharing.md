@@ -52,9 +52,34 @@ semantic version. A `moco.json` in your project root describes it:
 }
 ```
 
-The package needs an **entry point** — one source file whose `wfspec_name` equals
+The package needs an **entry point** — one source file whose `header.workflow_name` equals
 `wfspec_package_name`. Everything else in `sources` is a child workflow the entry point may
-reference by name. Tests ship alongside, so whoever inherits the workflow inherits its tests.
+reference by name (`workflow: {ref: <workflow_name>}`). Tests ship alongside, so whoever inherits
+the workflow inherits its tests.
+
+```yaml
+# src/hello-moco.yaml — the entry point
+header:
+  schema_version: 2.0.0
+  workflow_name: hello-moco      # == wfspec_package_name
+
+input:
+  repo: moco-workflow/moco
+
+output: "{{ summary }}"
+
+main:
+  task_name: summarize
+  workflow:
+    ref: summarize-repo          # src/summarize-repo.yaml, same package
+    input:
+      repo: "{{ repo }}"
+  output:
+    as: summary
+```
+
+**A workflow's version is its package's version.** A wfspec carries no version of its own: every
+workflow in the package is published as `wfspec_package_version`.
 
 ```bash
 moco publish --dry-run     # validate and show what would be published
@@ -70,9 +95,11 @@ changing what a version means undermines both.
 - **major** — a changed or removed input, or a changed output shape
 
 The distinction matters because of how callers resolve you. A caller that writes
-`wfspec: {name: payment-charge}` with no version takes the highest version available to it; one that
-pins `version: 1.0.0` stays there. A patch should be safe for everyone. A breaking change needs a
-major bump so the people who pinned are not moved.
+`ref: payments/payment-charge` with no version takes the highest version available to it; one that
+pins `ref: payments/1.*/payment-charge` stays on major `1`, and `payments/1.0.0/payment-charge`
+stays on exactly that version. A patch should be safe for everyone. A breaking change needs a major
+bump so the people who pinned are not moved. See
+[Composing Workflows](./child-workflows.md#ref--a-published-workflow) for the `ref` forms.
 
 ---
 
@@ -97,7 +124,7 @@ When someone runs `hello-moco` at a given tier, Moco looks for package versions 
 3. **targeted at that user**,
 
 and takes the **highest version** among them. A version pin narrows the search rather than
-bypassing it — and the pin may be partial, so pinning major `1` picks the highest `1.x.y` available
+bypassing it — and the pin may be a wildcard, so pinning `1.*` picks the highest `1.x.y` available
 to you.
 
 Two consequences are worth internalising:
@@ -159,9 +186,7 @@ find out why an operation was refused.
 
 Workflows can also make authorization decisions themselves. The `authz.*` activities let a workflow
 check whether its caller may do something and branch accordingly — see the
-[authz activity reference](../reference/activities/authz.md). A workflow can also declare
-`run_as_user_id` to always execute as a fixed identity, regardless of who invoked it, which is how a
-shared workflow reaches resources its callers cannot.
+[authz activity reference](../reference/activities/authz.md).
 
 ---
 
@@ -171,10 +196,15 @@ Secrets are **not** part of a published package, and this is deliberate. A wfspe
 secret by key:
 
 ```yaml
-- activity:
+- task_name: summarize
+  activity:
     type: openai.chat.completions
-    input_data:
+    input:
       apikey_secret_key: OPENAI_API_KEY
+      model_name: gpt-4o-mini
+      messages:
+        - role: user
+          content: "Summarize: {{ text }}"
 ```
 
 The key is resolved at execution time, in the caller's own secret scope. So a colleague running your

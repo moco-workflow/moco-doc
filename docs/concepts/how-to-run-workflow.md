@@ -5,7 +5,7 @@ sidebar_position: 7
 
 # How Workflows Run
 
-A workflowspec says *what* should happen. It says nothing about *how* the run is dispatched —
+A wfspec says *what* should happen. It says nothing about *how* the run is dispatched —
 whether it becomes a durable distributed workflow, a single retryable unit of work, or a function
 call in a server process. That choice is made per run, through **execute options**, and the same
 spec works under all of them.
@@ -39,8 +39,8 @@ without the workflow containing a single line of checkpointing logic. It is also
 `wait_for` viable: a workflow can sit idle for days waiting on a human approval without holding a
 process open.
 
-Child workflows and activities map directly onto the corresponding Temporal concepts, so retries,
-timeouts, and cancellation all behave the way Temporal's do.
+`sync`, `async` and `detached` child workflows and activities map directly onto the corresponding
+Temporal concepts, so retries, timeouts, and cancellation all behave the way Temporal's do.
 
 Use it unless you have a specific reason not to.
 
@@ -107,7 +107,7 @@ A workflow that waits on events, runs for hours, or must not be re-executed from
 An **entity workflow** is a long-lived workflow instance that represents one domain object — an
 order, a device, a user session — and is addressed by a deterministic ID rather than started afresh
 each time. It stays alive waiting for events, keeps state across interactions, and typically has a
-[state machine](./state-machines.md) as its body.
+[state machine](./state-machines.md) as its `main`.
 
 The pattern is the Actor Model expressed in workflows: instead of a database row plus handlers that
 load and save it, the entity *is* a running workflow holding its own state.
@@ -143,16 +143,38 @@ lost to a race between starting the entity and sending to it.
 
 Entity workflows require `execute_mode: "workflow"`; `workflow_id` must be set explicitly.
 
-An entity that lives long enough will accumulate event history. Pair it with
-[`continue_as_new_checkpoint`](../reference/statements.md#continue_as_new_checkpoint) to keep the
-history bounded.
+From inside a workflow, the same start-or-signal is an `emit_event` task with an `entity_workflow`
+block. `target_workflow_id` is the entity's address:
+
+```yaml
+- task_name: add-item
+  emit_event:
+    topic: order_events
+    event_type: add_item
+    target_workflow_id: "order-entity:{{ order_id }}"
+    data:
+      sku: WIDGET-A
+      price: 10
+    entity_workflow:
+      ref: order-entity
+      input:
+        order_id: "{{ order_id }}"
+```
+
+See [Events](./events.md#starting-an-entity-workflow-signal-with-start).
+
+An entity that lives long enough will accumulate event history. Give its state machine a
+[`checkpoint_policy`](./state-machines.md#long-running-machines), or use a `checkpoint` task in a
+looping workflow, to continue as new and keep the history bounded.
 
 ---
 
 ## Execute options
 
 Execute options travel alongside the run, not inside the spec — the same wfspec can be run at a
-different tier, with a different timeout, under a different trace, without being edited.
+different tier, with a different timeout, under a different trace, without being edited. The
+workflow's version is not an option either: it is the version of the package the wfspec was
+published in, picked by name resolution (see [Releasing and Sharing](./release-and-sharing.md)).
 
 | Option | Purpose |
 |--------|---------|
@@ -162,10 +184,9 @@ different tier, with a different timeout, under a different trace, without being
 | `trace_id` | Correlation ID shared with every child workflow. Generated when omitted |
 | `debug_mode` | Emit debug events, including variables marked with `#` |
 | `enable_otel_trace` | Emit OpenTelemetry spans |
-| `catch_exception` | Return the error as a result instead of failing the run |
+| `catch_exception` | Return the error as the run's result instead of failing the run. Top-level runs only — inside a workflow, handle a child's failure with `on_error` |
 | `retry_policy` | Timeout and retry configuration for the run |
 | `entity_workflow_args` | Entity-workflow configuration, as above |
-| `child_mode` | Only meaningful when running a child workflow |
 
 ### Identity: `trace_id` and `workflow_id`
 
@@ -175,7 +196,7 @@ instance*, and is the handle for status, cancel, and terminate.
 
 Both are generated when omitted. Supply them when Moco is one step in a larger system and you want
 your own request ID to follow the work through it. A generated workflow ID has the form
-`{wfspec_name}:{wfspec_version}:{user_id}:{trace_id}`.
+`{workflow_name}:{version}:{user_id}:{trace_id}`.
 
 ### `retry_policy`
 
@@ -196,9 +217,32 @@ the useful retry boundary is almost always the individual activity — retrying 
 re-run everything that already succeeded. Set `max_attempts` at the workflow level only when the
 whole spec is idempotent.
 
-This policy governs the run as a whole. Individual activities carry their own `retry_policy` in the
-spec, and that is the level to tune first — see the
-[`activity` statement](../reference/statements.md#activity).
+This policy governs the run as a whole. Individual activities carry their own retry policy in the
+spec — `options.retry_policy` on the `activity` task, over a document-wide default in
+`header.metadata.default_activity_retry_policy` — and that is the level to tune first:
+
+```yaml
+header:
+  schema_version: 2.0.0
+  workflow_name: fetch-report
+  metadata:
+    default_activity_retry_policy:
+      timeout_sec: 60
+      max_attempts: 3
+
+main:
+  task_name: fetch
+  activity:
+    type: http.request
+    input:
+      method: GET
+      url: https://example.com/report
+    options:
+      retry_policy:
+        max_attempts: 5        # overrides the default, key by key
+```
+
+See the [`activity` task](../reference/statements.md).
 
 Only the Temporal runtime honors these settings. The in-memory runtime ignores them.
 
@@ -222,7 +266,7 @@ The same three modes and the same options are available from every entry point:
 | [REST API](../guides/run-moco-workflow-through-api.md#openapi) | `POST /api/workflow/execute` with an `options` object |
 | [MCP](../guides/run-moco-workflow-through-api.md#mcp) | `execute_workflow` / `start_workflow` tools |
 | Web console | Run a deployed workflow from its wfspec page |
-| Another workflow | A [`workflow` statement](../reference/statements.md#workflow), passing `execute_options` |
+| Another workflow | A [`workflow` task](./child-workflows.md#per-child-options), passing `options` |
 
 ---
 
@@ -231,4 +275,4 @@ The same three modes and the same options are available from every entry point:
 - [Running Workflows Through the API](../guides/run-moco-workflow-through-api.md) — wire format
 - [Using the Moco CLI](../guides/use-moco-cli.md) — the same options as flags
 - [Dual Runtime](./dual-runtime.md) — how the in-memory and Temporal runtimes differ
-- [State Machines](./state-machines.md) — the usual body of an entity workflow
+- [State Machines](./state-machines.md) — the usual `main` of an entity workflow

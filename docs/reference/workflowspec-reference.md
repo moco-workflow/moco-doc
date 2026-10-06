@@ -1,2431 +1,1327 @@
-# Moco Workflowspec Reference
+---
+sidebar_label: Workflowspec Reference
+sidebar_position: 1
+---
+
+# Workflowspec Reference
+
+A **workflowspec** (wfspec) is a YAML document that describes one workflow: its inputs, its
+result, and the tasks it runs. This page is the complete reference for the wfspec language. The
+individual task kinds are documented one by one in [Tasks](./statements.md), and the activities a
+task can call are in the [Activity Catalog](./activity-catalog.md).
 
 ## Table of Contents
 
-1. [Introduction](#introduction)
-2. [Workflowspec Structure](#workflowspec-structure)
-3. [Functions](#functions)
-4. [Statement Types](#statement-types)
-   - [Primitive Statements](#primitive-statements)
-   - [Composite Statements](#composite-statements)
-5. [Expression Syntax](#expression-syntax)
-6. [Variable Modifiers](#variable-modifiers)
-7. [Conditions](#conditions)
-8. [Activities](#activities)
-9. [State Machines](#state-machines)
-10. [Events](#events)
-11. [Child Workflows](#child-workflows)
-12. [Complete Examples](#complete-examples)
+1. [A first wfspec](#a-first-wfspec)
+2. [Document structure](#document-structure)
+3. [Tasks](#tasks)
+4. [Values and expressions](#values-and-expressions)
+5. [Conditions](#conditions)
+6. [Variable names (write targets)](#variable-names-write-targets)
+7. [Shared task keys](#shared-task-keys)
+8. [How a task runs](#how-a-task-runs)
+9. [Scopes and name resolution](#scopes-and-name-resolution)
+10. [Errors and control signals](#errors-and-control-signals)
+11. [Retry policy](#retry-policy)
+12. [Reserved names](#reserved-names)
+13. [Validating a wfspec](#validating-a-wfspec)
+14. [Complete example](#complete-example)
+15. [Quick reference](#quick-reference)
 
 ---
 
-## Introduction
-
-Moco is a YAML-based declarative workflow orchestration engine that provides a Python expression-driven DSL for defining complex workflows. It supports both in-memory (development/testing) and Temporal.io (production) runtimes.
-
-### Key Features
-
-- **Declarative YAML syntax** for workflow definitions
-- **Python expression evaluation** with sandboxed execution
-- **Dual runtime support** (in-memory and Temporal.io)
-- **Event-driven state machines** for complex logic
-- **Nested and parallel workflows** with multiple execution modes
-- **Rich activity system** with pluggable providers
-- **Comprehensive condition logic** with and/or/not operations
-
----
-
-## Workflowspec Structure
-
-A workflowspec is a YAML document that defines a complete workflow. The basic structure includes:
+## A first wfspec
 
 ```yaml
-wfspec_name: my-workflow           # Unique workflow identifier
-wfspec_version: 1.0.0              # Semantic version
+header:
+  schema_version: 2.0.0
+  workflow_name: hello-world
 
-context:                            # Initial context variables
-  variable1: "default value"
-  variable2: 42
+input:
+  name: world                         # declared input with a default
 
-input_data:                         # Input parameter definitions
-  param1: default_value             # With default
-  param2:                           # Required (no default)
+output:
+  greeting: '{{ greeting }}'          # the workflow's result
 
-output_name: result                 # Variable to return as workflow result
+main:
+  tasks:
+    - task_name: wait-a-moment
+      activity:
+        type: builtin.delay
+        input:
+          duration: 1s
 
-body:                               # Main workflow logic (a statement)
-  sequence:
-    elements:
-      - transform:
-          output_data:
-            - result: "{{ 'Hello, World!' }}"
+    - task_name: build-greeting
+      set:
+        - greeting: 'Hello, {{ name }}! It is {{ now() }}'
 ```
 
-### Top-Level Fields
+Every wfspec has a `header` and a `main`. `main` is one **task**; here it is a `tasks` container
+that runs two child tasks in order. Values inside `{{ }}` are Python expressions.
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `wfspec_name` | string | Yes | Unique workflow identifier |
-| `wfspec_version` | string | Yes | Semantic version (e.g., "1.0.0") |
-| `context` | object | No | Initial context variables |
-| `input_data` | object | No | Input parameter definitions |
-| `output_name` | string | No | Variable name to return as result |
-| `body` | statement | Yes | Main workflow logic (any statement type) |
-| `functions` | list | No | Reusable functions callable via the `call` statement |
+### File conventions
+
+- One document per file. The usual suffix is `.yaml` (or `.wfspec.yaml`).
+- Files are loaded with a safe YAML loader, which reads the bare words `on`, `off`, `yes`, `no`,
+  `y` and `n` as booleans. Quote them when you need them as keys or strings in `input`,
+  `context` or activity data: `'yes': 1`.
+- Document intent with YAML comments. Tasks have no `description` field.
 
 ---
 
-## Functions
+## Document structure
 
-`functions` lets you define reusable, named units of logic inside a wfspec and invoke them
-with the [`call`](./statements.md#call) statement. A function is a subset of a wfspec and is
-executed as an inline child workflow (fresh context); its return value comes from
-`output_data`.
+### Top-level keys
+
+| Key | Required | Type | Description |
+|---|---|---|---|
+| `header` | yes | mapping | Identity and metadata of the workflow |
+| `context` | no | mapping | Initial workflow variables. Values may be expressions |
+| `input` | no | mapping | Declared inputs and their defaults. Values are **not** evaluated |
+| `output` | no | any | The workflow's result, evaluated after `main` completes |
+| `functions` | no | mapping | Private sub-workflows of this document |
+| `main` | yes | task | The task the workflow runs |
+
+No other top-level keys are allowed.
+
+### `header`
 
 ```yaml
-wfspec_name: math-demo
-wfspec_version: 1.0.0
+header:
+  schema_version: 2.0.0
+  workflow_name: order-intake
+  tags: [orders, intake]
+  metadata:
+    owner: team-orders                # free-form
+    default_activity_retry_policy:    # read by the engine
+      max_attempts: 3
+      timeout_sec: 60
+```
+
+| Key | Required | Description |
+|---|---|---|
+| `schema_version` | yes | Version of the wfspec language, `2.x.y`. Use `2.0.0` |
+| `workflow_name` | yes | Name of the workflow. Lowercase letters, digits, `.`, `_` and `-`, starting with a letter or digit |
+| `tags` | no | List of strings, used for search and grouping |
+| `metadata` | no | Free-form mapping. The engine reads one key: `default_activity_retry_policy`, the [retry policy](#retry-policy) every activity in the document starts from |
+
+The header has no version. A workflow's version is the version of the package it is published in
+(`moco.json`), so publishing a new release never requires editing the spec. See
+[Release and Sharing](../concepts/release-and-sharing.md).
+
+### `context`
+
+Initial variables that always exist. Entries are evaluated in order, so a later entry can use an
+earlier one. A name modifier on a key applies to its value (here `#literal` keeps a template
+unevaluated).
+
+```yaml
+header:
+  schema_version: 2.0.0
+  workflow_name: context-example
+
+context:
+  started_at: '{{ now() }}'
+  currency: USD
+  greeting_template#literal: 'Dear {{ customer }},'
+  audit_trail: []
+
+main:
+  set:
+    - _log#: 'started at {{ started_at }} in {{ currency }}'
+```
+
+### `input`
+
+The parameters a caller may pass, with their defaults. Values are taken as written, not
+evaluated. A key with no value has the default `null`; nothing enforces that a caller provides it,
+so validate required inputs with a [`raise`](./statements.md#raise) task.
+
+```yaml
+header:
+  schema_version: 2.0.0
+  workflow_name: input-example
+
+input:
+  order_id:                           # null unless the caller passes it
+  quantity: 1
+  express: false
+
+main:
+  tasks:
+    - task_name: require-order-id
+      raise:
+        if: '{{ not order_id }}'
+        type: error
+        error_type: ValidationError
+        message: order_id is required
+    - set:
+        - shipping: '{{ "express" if express else "standard" }}'
+```
+
+### How the context is built
+
+When a run starts, the workflow context is built in this order:
+
+1. `context`, evaluated entry by entry.
+2. `input`: the declared defaults, then the caller's values on top. Caller keys that are not
+   declared are merged too. Caller keys that are [reserved names](#reserved-names) are dropped.
+3. After a [checkpoint](./statements.md#checkpoint) restart, the saved context replaces the
+   result of steps 1 and 2.
+
+A caller can therefore override a `context` entry by passing the same key as input.
+
+### `output`
+
+The workflow's result, evaluated against the workflow context once `main` completes. It is either
+a single expression or any structure containing expressions.
+
+```yaml
+header:
+  schema_version: 2.0.0
+  workflow_name: output-example
+
+output:
+  order_id: '{{ order_id }}'
+  total: '{{ total }}'
+  lines: '{{ len(items) }}'
+
+input:
+  order_id: ORD-1
+  items: [{price: 2.5}, {price: 4.0}]
+
+main:
+  set:
+    - total: '{{ sum(i["price"] for i in items) }}'
+```
+
+- Without `output`, the workflow returns `{}`.
+- `output: '{{ total }}'` returns a single value of any type.
+- After [`raise: terminate`](#control-signals) the workflow still completes successfully and
+  `output` is evaluated as usual. The engine adds a `terminate_message` key to a mapping result;
+  any other result is wrapped as `{result: <value>, terminate_message: ...}`.
+
+### `functions`
+
+Functions are sub-workflows private to the document. Each has an optional `input` (parameters and
+defaults), an optional `output` (its result) and a `main` task. Call one with a
+[`workflow`](./statements.md#workflow) task and `function:`.
+
+```yaml
+header:
+  schema_version: 2.0.0
+  workflow_name: functions-example
+
+input:
+  a: 3
+  b: 4
+
+output:
+  hypotenuse: '{{ c }}'
 
 functions:
-  - function: add                 # function name
-    input_data:
-      a:
-      b:
-    output_data:
-      sum: "{{ a + b }}"
-    body:
-      transform: {}
+  square:
+    input:
+      x: 0
+    output: '{{ y }}'
+    main:
+      set:
+        - y: '{{ x * x }}'
 
-output_name: result
+  hypotenuse:
+    input:
+      a: 0
+      b: 0
+    output: '{{ round((a2 + b2) ** 0.5, 3) }}'
+    main:
+      tasks:
+        - workflow:
+            function: square          # a function may call its siblings
+            input: {x: '{{ a }}'}
+          output:
+            as: a2
+        - workflow:
+            function: square
+            input: {x: '{{ b }}'}
+          output:
+            as: b2
 
-body:
-  sequence:
-    elements:
-      - call:
-          function: add
-          input_data:
-            a: 1
-            b: 2
-          output_name: result     # -> { "sum": 3 }
+main:
+  task_name: compute
+  workflow:
+    function: hypotenuse
+    input:
+      a: '{{ a }}'
+      b: '{{ b }}'
+  output:
+    as: c                             # 5.0
 ```
 
-**Function fields:**
+- Function names use letters, digits, `_` and `-`, starting with a letter or `_`.
+- A call runs with a fresh context built only from its `input`. The function cannot see or change
+  the caller's variables.
+- A function can call sibling functions, but not itself, directly or indirectly. Recursion fails
+  at runtime.
+- Functions are callable only from the document that defines them.
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `function` | string | Yes | Function name (referenced by `call`) |
-| `input_data` | object | No | Input parameter definitions |
-| `output_data` | any | No | Return value definition (supports expressions) |
-| `body` | statement | No | Function logic |
+### `main`
 
-Functions are only visible within the defining wfspec, and a function may call sibling
-functions. Recursion is not supported (rejected by the cyclic call-stack guard).
+Exactly one task. Most workflows use a `tasks` container here; a workflow that does one thing can
+use that task directly.
 
 ---
 
-## Statement Types
+## Tasks
 
-Statements are the building blocks of workflows. They come in two categories: **primitives** (leaf nodes) and **composites** (containers for other statements).
+Everything under `main` is a **task**. A task is a mapping with:
 
-### Common Statement Parameters
-
-All statements support these optional parameters:
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `name` | string | Unique identifier for the statement |
-| `description` | string | Human-readable description |
-| `condition` | expression or list | Condition to execute (skip if false) |
-| `output_name` | string | Variable to store statement result |
-| `output_data` | list | Data transformations after execution |
-
----
-
-### Primitive Statements
-
-Primitive statements are leaf nodes that perform specific actions.
-
-#### 1. Transform
-
-Performs data transformations and variable assignments.
+- **exactly one kind key**, which says what the task does;
+- any of the [shared keys](#shared-task-keys) `task_name`, `skip_if`, `props`, `output`,
+  `on_error`;
+- nothing else. In particular, a task has no `input` key (kinds that take input declare it
+  themselves, such as `activity.input`) and no `description`.
 
 ```yaml
-transform:
-  input_data:                       # Optional: input transformations
-    - temp_var: "{{ value * 2 }}"
-  output_data:                      # Output transformations
-    - result: "{{ temp_var + 10 }}"
-    - message: "Result is {{ result }}"
-```
-
-**Parameters:**
-- `input_data`: List of variable assignments (evaluated before body)
-- `output_data`: List of variable assignments (main transformation logic)
-- `output_name`: Variable to store the last output_data result
-
-**Example: Basic calculation**
-```yaml
-- transform:
-    output_data:
-      - price: 100
-      - tax: "{{ price * 0.08 }}"
-      - total: "{{ price + tax }}"
-```
-
-**Example: String manipulation**
-```yaml
-- transform:
-    output_data:
-      - name: "John Doe"
-      - greeting: "Hello, {{ name }}!"
-      - uppercase: "{{ greeting.upper() }}"
-```
-
----
-
-#### 2. Abort
-
-Terminates workflow execution with different behaviors.
-
-```yaml
-abort:
-  type: terminate                   # abort, terminate, break, break_iteration, raise
-  message: "Workflow completed successfully"
-```
-
-**Abort Types:**
-
-| Type | Behavior |
-|------|----------|
-| `abort` | Abort entire workflow |
-| `terminate` | Gracefully terminate workflow |
-| `break` | Break out of current sequence/parallel block |
-| `break_iteration` | Break out of current iteration loop |
-| `raise` | Raise error and fail workflow |
-
-**Example: Conditional termination**
-```yaml
-- abort:
-    condition: "{{ price < 0 }}"
-    type: raise
-    message: "Invalid price: {{ price }}"
-```
-
-**Example: Early exit from loop**
-```yaml
-- iteration:
-    input_data: "{{ items }}"
-    body:
-      sequence:
-        elements:
-          - transform:
-              output_data:
-                - current: "{{ iter_item }}"
-          - abort:
-              condition: "{{ current == 'target' }}"
-              type: break_iteration
-              message: "Found target item"
-```
-
----
-
-#### 3. Activity
-
-Executes a registered activity (external function/service).
-
-```yaml
-activity:
-  type: http.request        # Activity type identifier
-  version: 1.0.0                    # Activity version
-  config_data:                      # Static configuration
+# Look the user up                       <- intent goes in a comment
+task_name: fetch-user                    # shared key
+skip_if: '{{ not user_id }}'             # shared key
+activity:                                # the kind
+  type: http.request
+  input:
     method: GET
-  input_data:                       # Dynamic input parameters
-    url: "{{ api_endpoint }}"
-  output_name: response             # Store result in variable
-  retry_policy:                     # Timeout & retry (Temporal runtime only)
-    timeout_sec: 30                 # Per-attempt execution timeout
-    max_attempts: 3                 # Total attempts (initial + retries)
-  enable_cache: true                # Cache result
+    url: 'https://api.example.com/users/{{ user_id }}'
+    output_json: true
+output:                                  # shared key
+  data: '{{ _["json"] }}'
+  as: user
 ```
 
-**Parameters:**
-- `type`: Activity type identifier (e.g., "http.request")
-- `version`: Activity version (default: "1.0.0")
-- `config_data`: Static configuration (evaluated once)
-- `input_data`: Dynamic input (evaluated per execution)
-- `output_name`: Variable to store activity result
-- `output_data`: Transform activity result before storing
-- `retry_policy`: Nested timeout/retry configuration (honored by the Temporal runtime only). Sub-fields:
-  - `timeout_sec`: Per-attempt (start-to-close) execution timeout in seconds
-  - `schedule_to_close_timeout_sec`: Optional overall timeout across all attempts
-  - `heartbeat_timeout_sec`: Optional heartbeat timeout (Temporal only)
-  - `heartbeat_interval_sec`: Optional heartbeat cadence (Temporal only). Heartbeating is enabled only when both `heartbeat_timeout_sec` and `heartbeat_interval_sec` are set
-  - `max_attempts`: Total attempts (initial + retries); `0` = unlimited in Temporal
-  - `initial_interval_sec`: Optional initial retry backoff interval
-  - `backoff_coefficient`: Optional exponential backoff multiplier
-  - `maximum_interval_sec`: Optional cap on retry backoff interval
-  - `non_retryable_error_types`: Optional list of error types that skip retries
-- `execute_locally`: Force local execution (bypass Temporal). Overrides whatever the activity
-  itself defaults to; omit it to keep that default. Some activities are already local — every
-  `selenium.*` and `playwright.*` type is, so a browser session stays on one worker, and setting
-  `false` there breaks sessions. See
-  [Activities that are already local by default](../concepts/activities.md#activities-that-are-already-local-by-default)
-- `enable_cache`: Enable result caching
-- `cache_policy`: Cache policy configuration
-- `async_mode`: Start the activity without blocking. The activity resolves to a token string
-  (`async-activity:<name>:<run id>`, unique per invocation) instead of its result; the result is
-  published to the event bus under that token when the activity finishes. Capture it with
-  `output_name` and reference it as an expression from a `wait_for` or a transition trigger. See
-  [Async activity results](../concepts/events.md#async-activity-results)
-- `async_event_topic`: Topic the completion event is published to (default `default`)
+| Category | Kind | Does |
+|---|---|---|
+| Primitive | [`activity`](./statements.md#activity) | Calls an activity (HTTP, SQL, shell, LLM, ...) |
+| Primitive | [`workflow`](./statements.md#workflow) | Runs a child workflow or a function |
+| Primitive | [`set`](./statements.md#set) | Assigns variables |
+| Primitive | [`raise`](./statements.md#raise) | Fails, or stops early with a control signal |
+| Primitive | [`emit_event`](./statements.md#emit_event) | Publishes an event |
+| Primitive | [`wait_for`](./statements.md#wait_for) | Waits for an event, or sleeps |
+| Primitive | [`checkpoint`](./statements.md#checkpoint) | Restarts the run with its state saved (continue-as-new) |
+| Primitive | [`state_machine`](./statements.md#state_machine) | Runs an event-driven state machine |
+| Primitive | [`rules_engine`](./statements.md#rules_engine) | Evaluates rules over a set of facts |
+| Container | [`tasks`](./statements.md#tasks) | Runs child tasks, in sequence or in parallel |
+| Control flow | [`loop`](./statements.md#loop) | Runs a task once per item |
+| Control flow | [`switch`](./statements.md#switch) | Picks a task by comparing one value |
+| Control flow | [`branches`](./statements.md#branches) | Picks a task by `if` / `elif` / `else` conditions |
 
-**Example: HTTP request**
-```yaml
-- activity:
-    type: http.request
-    input_data:
-      method: POST
-      url: https://api.example.com/orders
-      headers:
-        Content-Type: application/json
-      body:
-        order_id: "{{ order_id }}"
-        total: "{{ total }}"
-    output_name: api_response
-    retry_policy:
-      timeout_sec: 30
-```
-
-**Example: Delay activity**
-```yaml
-- activity:
-    type: builtin.delay
-    input_data:
-      duration: 5s                  # 5 seconds
-```
+Each kind produces a **raw output**, bound to `_` while the task's `output` is processed. The
+[Tasks](./statements.md) page lists what `_` is for each kind.
 
 ---
 
-#### 4. Workflow
+## Values and expressions
 
-Executes a child workflow.
+### How a value is evaluated
 
-```yaml
-workflow:
-  wfspec:
-    name: child-workflow            # Reference by name/version
-    version: 1.0.0
-  child_mode: sync       # Execution mode
-  input_data:                       # Input to child workflow
-    param1: "{{ value }}"
-  output_name: child_result         # Store child result
-```
+Almost every value in a wfspec is evaluated before it is used: `context` entries, activity
+`input`, `set` values, `output`, conditions, and so on. Evaluation is recursive:
 
-**Child Modes:**
-
-| Mode | Behavior |
-|------|----------|
-| `inline` | Child runs in parent's context (shares variables) |
-| `sync` | Child runs independently, parent waits for result |
-| `async` | Child runs independently, parent waits for start |
-| `detached` | Child runs independently, parent doesn't wait |
-
-**Parameters:**
-- `wfspec`: Workflow specification
-  - `name` + `version`: Reference existing workflow
-  - `content`: Inline workflow definition
-- `child_mode`: Execution mode (default: "inline")
-- `execute_options`: Execution options (workflow_id, task_queue, etc.)
-- `input_data`: Input parameters for child
-- `output_name`: Variable to store child result
-- `output_data`: Transform child result before storing
-
-**Example: Call child workflow by name**
-```yaml
-- workflow:
-    wfspec:
-      name: process-order
-      version: 2.0.0
-    child_mode: sync
-    input_data:
-      order_id: "{{ order_id }}"
-      customer: "{{ customer }}"
-    output_name: order_result
-```
-
-**Example: Inline child workflow**
-```yaml
-- workflow:
-    wfspec:
-      content:
-        wfspec_name: inline-child
-        wfspec_version: 1.0.0
-        input_data:
-          x:
-        output_name: result
-        body:
-          transform:
-            output_data:
-              - result: "{{ x * 2 }}"
-    child_mode: inline
-    input_data:
-      x: 42
-    output_name: doubled
-```
-
----
-
-#### 5. Wait For
-
-Waits for an event or timeout.
+| Value | Result |
+|---|---|
+| Mapping | A mapping with each value evaluated. Keys are not evaluated |
+| List | Each element evaluated |
+| String without `{{` | The string itself |
+| String that is exactly one `{{ e }}` (surrounding spaces allowed) | The value of Python expression `e`, **keeping its type** (number, list, dict, `None`, ...) |
+| Any other string containing `{{` | Interpolation: each `{{ e }}` is replaced by `str()` of its value, and the result is a string |
+| Number, boolean, `null` | Itself |
 
 ```yaml
-wait_for:
-  event:
-    topic: order_events              # Event topic to listen to
-    match_expression: >              # Filter expression
-      {{ event.data.get('order_id') == order_id }}
-  timeout_sec: 30                    # Timeout in seconds
-  output_name: received_event        # Store received event
+header:
+  schema_version: 2.0.0
+  workflow_name: evaluation-example
+
+input:
+  name: Ada
+  prices: [15.99, 8.5, 25.0]
+
+output: '{{ report }}'
+
+main:
+  set:
+    - report:
+        count: '{{ len(prices) }}'                  # 3 (an int)
+        cheapest: '{{ min(prices) }}'               # 8.5 (a float)
+        summary: '{{ name }} has {{ len(prices) }} items'   # a string
+        ranked: '{{ sorted(prices, reverse=True) }}'        # a list
+        status: pending                              # no {{ }}: a plain string
 ```
 
-**Parameters:**
-- `event`: Event filter configuration
-  - `topic`: Event topic to subscribe to
-  - `match_expression`: Python expression to filter events
-- `timeout_sec`: Maximum wait time (required)
-- `output_name`: Variable to store received event
-- `output_data`: Transform event before storing
+`input` defaults are the one place where values are not evaluated.
 
-**Example: Wait for order completion**
-```yaml
-- wait_for:
-    event:
-      topic: order_events
-      match_expression: >
-        {{ event.data.get('order_id') == order_id and
-           event.data.get('status') == 'completed' }}
-    timeout_sec: 60
-    output_name: completion_event
-```
+### Expression syntax
 
-**Example: Wait for timeout only**
-```yaml
-- wait_for:
-    timeout_sec: 10                  # Wait 10 seconds
-```
-
----
-
-#### 6. Emit Event
-
-Emits an event to the event bus.
+An expression is a single Python expression, not a statement: no assignments, `import`, `def` or
+`for` loops. Comprehensions, conditional expressions, f-strings and lambdas all work.
 
 ```yaml
-emit_event:
-  input_data:
-    topic: notification_events       # Event topic
-    data:                            # Event payload
-      message: "Order processed"
-      order_id: "{{ order_id }}"
-    target_workflow_id: "{{ parent_id }}"  # Optional: target workflow
-    metadata:                        # Optional: event metadata
-      priority: high
+header:
+  schema_version: 2.0.0
+  workflow_name: expression-syntax-example
+
+input:
+  people:
+    - {name: Ada, dept: eng, salary: 120}
+    - {name: Bo, dept: ops, salary: 90}
+
+main:
+  set:
+    - eng_names: '{{ [p["name"] for p in people if p["dept"] == "eng"] }}'
+    - label: '{{ "big" if len(people) > 10 else "small" }}'
+    - headline: '{{ f"{len(people)} people, first is {people[0]}" }}'
+    # A long expression may span lines; newlines inside {{ }} are treated as spaces.
+    - stats: |
+        {{
+          {
+            "headcount": len(people),
+            "avg_salary": round(sum(p["salary"] for p in people) / len(people), 1)
+          }
+        }}
 ```
 
-**Parameters:**
-- `input_data`: Event data
-  - `topic`: Event topic (required)
-  - `data`: Event payload (required)
-  - `target_workflow_id`: Target specific workflow (optional)
-  - `metadata`: Additional event metadata (optional)
+Quoting tips:
 
-**Example: Notify parent workflow**
-```yaml
-- emit_event:
-    input_data:
-      topic: child_events
-      target_workflow_id: "{{ __sys_info__.parent_workflow_id }}"
-      event_type: processing_complete
-      data:
-        result: "{{ processing_result }}"
-```
+- Wrap expressions in single quotes so that double quotes can be used inside them.
+- A `#` inside a `>` or `>-` folded scalar is part of the expression text, so Python reads it as
+  a comment that runs to the end of the folded line, which is the whole expression. Do not put
+  comments inside multi-line expressions.
 
----
+### What expressions can use
 
-#### continue_as_new_checkpoint
+| Kind | Available |
+|---|---|
+| Builtins | Python builtins, except unsafe ones such as `eval`, `exec`, `compile`, `open`, `input`, `globals`, `vars`, `dir`, `type`, `getattr`, `setattr`, `delattr`, `hasattr` |
+| Libraries | `np` (numpy), `pd` (pandas), `pa` (pyarrow), `glom`, `json`, `yaml`, `re`, `base64`, `bs4` (BeautifulSoup), `dt` (`datetime` module), `rd` (`dateutil.relativedelta`) |
+| Helpers | `now()` (current time, deterministic on replay), `uuid4()`, `copy`, `deepcopy`, `remap`, `StringIO`, `encrypt` |
+| Variables | Every visible variable, by bare name. See [Scopes and name resolution](#scopes-and-name-resolution) |
 
-Checks whether the runtime suggests restarting the workflow. In Temporal, this prevents event history from growing too large by restarting execution with serialized state.
+Library access is restricted to safe functions: submodules, file access and code-loading functions
+are blocked.
 
-```yaml
-continue_as_new_checkpoint:
-  name: checkpoint                   # Optional: identifier for logging
-  serialize_data_context: true       # Whether to include data_context in serialized state
-```
+### Special names
 
-**Parameters:**
-- `name`: Optional identifier (for logging)
-- `serialize_data_context`: Whether to serialize data context variables (default: `true`). Set to `false` if context is rebuilt from external state on restart.
-- `condition`: Skip this statement if the expression is falsy (optional)
-
-**Example: Checkpoint after each iteration batch**
-```yaml
-- iteration:
-    iter_type: sequence
-    input_data:
-      - iter_items: "{{ batches }}"
-    body:
-      activity:
-        type: process_batch
-        input_data:
-          batch: "{{ iter_item }}"
-- continue_as_new_checkpoint:
-    name: post-batch-checkpoint
-    serialize_data_context: true
-```
-
----
-
-### Composite Statements
-
-Composite statements contain and orchestrate other statements.
-
-#### 1. Sequence
-
-Executes statements sequentially (one after another).
+| Name | Value |
+|---|---|
+| `_` | The current task's raw output, inside its `output` (and the error, inside `on_error.do`) |
+| `__context__` | A read-only mapping of every visible variable, merged innermost-first. `"x" in __context__` asks whether `x` is defined here |
+| `__sys_info__` | Information about the run: `workflow_id`, `trace_id` (shared by a workflow and all its children), `tier`, `debug_mode`, `is_continue_as_new`, and `state_machine` inside a state machine |
+| `__user_info__` | The user who started the run: `user_id`, `user_org`, `requester_user_id`, `auth_mode` |
+| `event` | The current event, inside `wait_for.event.match_expression` and state machine callbacks and conditions |
 
 ```yaml
-sequence:
-  elements:                          # List of statements
-    - transform:
-        output_data:
-          - step1: "first"
-    - transform:
-        output_data:
-          - step2: "second"
-    - transform:
-        output_data:
-          - step3: "third"
+header:
+  schema_version: 2.0.0
+  workflow_name: special-names-example
+
+input:
+  region:
+
+main:
+  set:
+    - workflow_id: '{{ __sys_info__.get("workflow_id") }}'
+    - user_id: '{{ __user_info__.get("user_id") }}'
+    - region_given: '{{ "region" in __context__ and region is not None }}'
 ```
 
-**Parameters:**
-- `elements`: List of statements to execute in order
+### Evaluation modifiers
 
-**Example: Multi-step process**
-```yaml
-- sequence:
-    name: order-processing
-    elements:
-      - transform:
-          output_data:
-            - status: "validating"
-      - activity:
-          type: http.request
-          input_data:
-            url: https://api.example.com/validate
-            body: { order_id: "{{ order_id }}" }
-          output_name: validation
-      - abort:
-          condition: "{{ not validation.valid }}"
-          type: raise
-          message: "Validation failed"
-      - transform:
-          output_data:
-            - status: "processing"
-      - activity:
-          type: http.request
-          input_data:
-            url: https://api.example.com/process
-            body: { order_id: "{{ order_id }}" }
-          output_name: result
-```
+By default a value is evaluated as a Python expression. A modifier on the variable name changes
+how its value is evaluated. Modifiers are written after the name and are stripped before the
+value is stored (`report#jinja` stores `report`).
 
----
-
-#### 2. Parallel
-
-Executes statements in parallel with join semantics.
+| Modifier | Evaluation |
+|---|---|
+| `#python` | Python expression in `{{ }}` (the default) |
+| `#literal` | None. The value is kept exactly as written, braces included |
+| `#jinja` | Rendered as a sandboxed Jinja2 template, with every visible variable available. Use it for `{% if %}` / `{% for %}` and filters |
+| `#python_glom` | The value is a glom spec, applied to `__context__`: `glom(__context__, <value>)`. A path must be a quoted Python string |
 
 ```yaml
-parallel:
-  join_type: and                     # and (all must succeed) or or (one must succeed)
-  elements:                          # List of statements
-    - transform:
-        output_data:
-          - result1: "{{ calc1() }}"
-    - transform:
-        output_data:
-          - result2: "{{ calc2() }}"
-    - transform:
-        output_data:
-          - result3: "{{ calc3() }}"
+header:
+  schema_version: 2.0.0
+  workflow_name: modifiers-example
+
+input:
+  people:
+    - {name: Ada, dept: eng}
+    - {name: Bo, dept: ops}
+
+main:
+  set:
+    # Kept as text, for example to render later or pass to another system.
+    - template#literal: 'Hello {{ name }}'
+
+    # Jinja2 has statements and filters, which one Python expression does not.
+    - roster#jinja: |
+        {% for p in people | sort(attribute='name') %}
+        - {{ p.name | upper }} ({{ p.dept }})
+        {% endfor %}
+
+    # A glom path. Note the inner quotes: the value is Python, not a bare path.
+    - first_dept#python_glom: '"people.0.dept"'
 ```
 
-**Parameters:**
-- `join_type`: "and" (all must succeed) or "or" (at least one must succeed)
-- `elements`: List of statements to execute in parallel
-
-**Example: Parallel API calls**
-```yaml
-- parallel:
-    join_type: and
-    elements:
-      - activity:
-          name: fetch-user
-          type: http.request
-          input_data:
-            url: https://api.example.com/users/{{ user_id }}
-          output_name: user_data
-      - activity:
-          name: fetch-orders
-          type: http.request
-          input_data:
-            url: https://api.example.com/orders?user={{ user_id }}
-          output_name: order_data
-      - activity:
-          name: fetch-preferences
-          type: http.request
-          input_data:
-            url: https://api.example.com/preferences/{{ user_id }}
-          output_name: pref_data
-```
-
-**Example: OR join (first success wins)**
-```yaml
-- parallel:
-    join_type: or
-    elements:
-      - activity:
-          name: primary-api
-          type: http.request
-          input_data:
-            url: https://primary.api.com/data
-          output_name: api_result
-      - activity:
-          name: backup-api
-          type: http.request
-          input_data:
-            url: https://backup.api.com/data
-          output_name: api_result
-```
-
----
-
-#### 3. Iteration
-
-Loops over a collection of items.
+Modifiers chain left to right, each applied to the previous result; later passes act only on
+strings. `#python#python` evaluates twice, which turns a string into a second expression:
 
 ```yaml
-iteration:
-  iter_type: sequence                # sequence or parallel
-  input_data: "{{ items }}"          # Collection to iterate
-  body:                              # Statement to execute per item
-    transform:
-      output_data:
-        - processed: "{{ iter_item }}"
-  join_type: and                     # For parallel: and or or
+header:
+  schema_version: 2.0.0
+  workflow_name: chained-modifiers-example
+
+context:
+  user_email: ada@example.com
+
+main:
+  set:
+    - pointer#literal: '{{ user_email }}'    # stored as the text '{{ user_email }}'
+    # pass 1: '{{ pointer }}'    -> '{{ user_email }}'
+    # pass 2: '{{ user_email }}' -> 'ada@example.com'
+    - value#python#python: '{{ pointer }}'
 ```
 
-**Parameters:**
-- `iter_type`: "sequence" (sequential) or "parallel" (concurrent)
-- `input_data`: Collection to iterate (list, dict.items(), range(), etc.)
-- `body`: Statement to execute for each item
-- `join_type`: Join semantics for parallel iteration ("and" or "or")
-
-**Special Variables:**
-- `iter_item`: Current item in iteration
-- `iter_items`: All items in collection
-
-**Example: Sequential iteration**
-```yaml
-- iteration:
-    iter_type: sequence
-    input_data: "{{ range(1, 6) }}"  # [1, 2, 3, 4, 5]
-    body:
-      sequence:
-        elements:
-          - transform:
-              output_data:
-                - current#: "{{ iter_item }}"
-          - activity:
-              type: builtin.delay
-              input_data:
-                duration: 1s
-```
-
-**Example: Parallel iteration**
-```yaml
-- iteration:
-    iter_type: parallel
-    join_type: and
-    input_data: "{{ order_ids }}"
-    body:
-      activity:
-        type: process-order
-        input_data:
-          order_id: "{{ iter_item }}"
-        output_name: order_result
-```
-
-**Example: Iterate over dictionary**
-```yaml
-- transform:
-    output_data:
-      - user_scores: { alice: 95, bob: 87, charlie: 92 }
-
-- iteration:
-    iter_type: sequence
-    input_data: "{{ user_scores.items() }}"
-    body:
-      transform:
-        output_data:
-          - name: "{{ iter_item[0] }}"
-          - score: "{{ iter_item[1] }}"
-          - grade: >
-            {{ 'A' if score >= 90 else 'B' if score >= 80 else 'C' }}
-```
-
-**Example: Early break from iteration**
-```yaml
-- iteration:
-    iter_type: sequence
-    input_data: "{{ items }}"
-    body:
-      sequence:
-        elements:
-          - transform:
-              output_data:
-                - found: "{{ iter_item }}"
-          - abort:
-              condition: "{{ iter_item == target }}"
-              type: break_iteration
-              message: "Found target item"
-```
-
----
-
-## Expression Syntax
-
-Expressions are the core of Moco's dynamic evaluation. They use Python syntax enclosed in `{{ }}` delimiters.
-
-### Basic Expression Syntax
-
-```yaml
-# String interpolation
-greeting: "Hello, {{ name }}!"
-
-# Full evaluation
-total: "{{ price * quantity }}"
-
-# Boolean expression
-is_valid: "{{ price > 0 and quantity > 0 }}"
-
-# Complex expression
-result: "{{ sum([x * 2 for x in range(10)]) }}"
-```
-
-### Expression Types
-
-Expressions can be evaluated in different modes:
-
-#### 1. Python (default)
-
-Standard Python expression evaluation.
-
-```yaml
-# Arithmetic
-result: "{{ 10 + 20 * 3 }}"          # 70
-
-# String methods
-upper: "{{ name.upper() }}"
-
-# List comprehension
-squares: "{{ [x**2 for x in range(5)] }}"
-
-# Dictionary access
-value: "{{ data['key'] }}"
-value: "{{ data.get('key', 'default') }}"
-```
-
-#### 2. Python Glom
-
-Path-based data extraction using glom library.
-
-```yaml
-# Extract nested value
-user_name: "{{ user.profile.name }}"
-
-# With type specification
-user_name#python_glom: "user.profile.name"
-
-# Complex glom path
-all_names#python_glom: "[users][name]"
-```
-
-#### 3. Literal
-
-No evaluation, treat as literal string.
-
-```yaml
-# Keep template syntax as-is
-template#literal: "{{ this_is_not_evaluated }}"
-
-# Useful for passing templates to other systems
-jinja_template#literal: "Hello {{ user_name }}!"
-```
-
-#### 4. Jinja2
-
-Jinja2 template evaluation.
-
-```yaml
-# Jinja2 template
-message#jinja: >
-  Dear {{ customer.name }},
-  Your order #{{ order.id }} has been {{ order.status }}.
-  {% if order.status == 'shipped' %}
-  Tracking: {{ order.tracking_number }}
-  {% endif %}
-```
-
-### Available in Expressions
-
-#### Python Builtins
-Whitelisted safe builtins (no `eval`, `exec`, `open`, `__import__`):
-- `abs`, `all`, `any`, `bool`, `dict`, `enumerate`, `filter`, `float`, `int`, `len`, `list`, `map`, `max`, `min`, `range`, `reversed`, `round`, `set`, `sorted`, `str`, `sum`, `tuple`, `zip`
-
-#### Libraries
-Pre-imported libraries:
-```python
-import numpy as np
-import pandas as pd
-import pyarrow as pa
-from glom import glom
-from bs4 import BeautifulSoup
-```
-
-#### Special Variables
-
-| Variable | Description |
-|----------|-------------|
-| `_` | Root context (all variables) |
-| `_raw_output` | Raw output from last statement |
-| `iter_item` | Current item in iteration |
-| `iter_items` | All items in iteration |
-| `__user_info__` | User information object |
-| `__sys_info__` | System information (trace_id: root trace shared across all child workflows, workflow_id: unique per workflow instance, tier, etc.) |
-
-**Example: Using special variables**
-```yaml
-- transform:
-    output_data:
-      - all_context#: "{{ _ }}"
-      - trace_id: "{{ __sys_info__.trace_id }}"
-      - workflow_id: "{{ __sys_info__['workflow_id'] }}"
-```
-
----
-
-## Variable Modifiers
-
-Variable modifiers control how variables are evaluated and stored. They use a special syntax: `variableName[@][#modifier...][#]`
-
-### Modifier Components
-
-| Modifier | Position | Description |
-|----------|----------|-------------|
-| `@` | After name | Container scope (don't persist to global context) |
-| `#python` | After name or `@` | Force Python expression evaluation |
-| `#literal` | After name or `@` | Force literal (no evaluation) |
-| `#python_glom` | After name or `@` | Force glom path evaluation |
-| `#jinja` | After name or `@` | Force Jinja2 template evaluation |
-| `#` | Trailing | Debug log value to output |
-
-### Container Scope (`@`)
-
-Variables with `@` are temporary and not saved to global context.
-
-```yaml
-- transform:
-    output_data:
-      - temp@: "{{ compute_expensive() }}"  # Temporary variable
-      - result: "{{ temp * 2 }}"            # Can use temp here
-      # temp is NOT saved to context after this transform
-```
-
-**Use case: Intermediate calculations**
-```yaml
-- transform:
-    output_data:
-      - subtotal@: "{{ sum(item_prices) }}"
-      - tax@: "{{ subtotal * 0.08 }}"
-      - shipping@: "{{ 5.99 if subtotal < 50 else 0 }}"
-      - total: "{{ subtotal + tax + shipping }}"
-      # Only 'total' is saved to context
-```
-
-### Debug Logging (`#`)
-
-Trailing `#` logs the variable value to debug output.
-
-```yaml
-- transform:
-    output_data:
-      - debug_value#: "{{ computation() }}"   # Logs value
-      - result: "{{ debug_value * 2 }}"
-```
-
-### Force Expression Type
-
-Override default expression evaluation.
-
-```yaml
-- transform:
-    output_data:
-      # Force literal (don't evaluate)
-      - template#literal: "{{ user_name }}"
-
-      # Force glom path
-      - user_name#python_glom: "user.profile.name"
-
-      # Force Jinja2
-      - message#jinja: "Hello {{ name }}!"
-```
-
-### Multi-stage Evaluation (`#python#python`)
-
-Chain modifiers for multiple evaluation passes.
-
-```yaml
-- transform:
-    output_data:
-      - var1: "result_var"
-      - var2: "{{ var1 }}"                  # "result_var"
-      - result_var: 42
-      - nested#python#python: "{{ var2 }}"  # First: "{{ var1 }}" -> "result_var"
-                                            # Second: "{{ result_var }}" -> 42
-```
-
-**Use case: Dynamic variable references**
-```yaml
-- transform:
-    output_data:
-      - field_name: "user_email"
-      - value#python#python: "{{ field_name }}"  # Gets value of user_email variable
-```
-
-### Combined Modifiers
-
-Combine multiple modifiers for complex behavior.
-
-```yaml
-- transform:
-    output_data:
-      # Temporary + debug logging
-      - temp@#: "{{ expensive_calc() }}"
-
-      # Container scope + force literal
-      - intermediate@#literal: "{{ template }}"
-
-      # Debug + glom + multi-stage
-      - extracted#python_glom#python#: "path.to.value"
-```
+Modifiers can be used wherever a variable is written: `context` keys, `set` and `output.set`
+keys, `output.as`, and the keys of the `input` maps of `activity`, `workflow` and `rules_engine`.
 
 ---
 
 ## Conditions
 
-Conditions control whether statements execute. They support simple expressions and complex logic.
+`skip_if`, `raise.if`, `branches` items, `wait_for.event.match_expression`, state machine
+`trigger.condition` and rule `if.expression` all take a **condition**:
 
-### Simple Condition
-
-Single boolean expression.
-
-```yaml
-- transform:
-    condition: "{{ price > 100 }}"
-    output_data:
-      - discount: "{{ price * 0.1 }}"
+```text
+condition := '{{ <expression> }}'
+           | and: [condition, ...]      # every sub-condition holds
+           | or:  [condition, ...]      # any sub-condition holds
+           | not: condition
 ```
 
-### OR Condition
-
-Execute if any condition is true.
-
-```yaml
-- transform:
-    condition:
-      - or:
-          - "{{ price > 100 }}"
-          - "{{ customer.is_premium }}"
-          - "{{ coupon_code != '' }}"
-    output_data:
-      - eligible_for_discount: true
-```
-
-### AND Condition
-
-Execute if all conditions are true.
+- An expression condition must evaluate to a `bool`. Anything else, including `None`, `0` or an
+  empty list, fails with `ConditionTypeError`. Write `{{ len(items) > 0 }}`, not `{{ items }}`.
+- `and` and `or` take a non-empty list and short-circuit.
+- The tree nests freely.
 
 ```yaml
-- transform:
-    condition:
-      - and:
-          - "{{ price > 0 }}"
-          - "{{ quantity > 0 }}"
-          - "{{ inventory >= quantity }}"
-    output_data:
-      - can_process: true
-```
+header:
+  schema_version: 2.0.0
+  workflow_name: conditions-example
 
-### NOT Condition
+input:
+  age: 30
+  country: US
+  is_member: true
+  is_banned: false
 
-Execute if condition is false.
+main:
+  tasks:
+    - task_name: domestic-adult-member
+      skip_if:
+        not:
+          and:
+            - '{{ age >= 18 }}'
+            - '{{ country == "US" }}'
+            - '{{ is_member }}'
+      set:
+        - tier: domestic-premium
 
-```yaml
-- abort:
-    condition:
-      - not: "{{ user.is_verified }}"
-    type: raise
-    message: "User not verified"
-```
-
-### Nested Conditions
-
-Combine AND/OR/NOT for complex logic.
-
-```yaml
-- transform:
-    condition:
-      - or:
-          - "{{ price > 1000 }}"
-          - and:
-              - "{{ customer.is_premium }}"
-              - "{{ customer.loyalty_points > 500 }}"
-          - and:
-              - "{{ coupon_code == 'SPECIAL' }}"
-              - not: "{{ used_special_offer }}"
-    output_data:
-      - apply_special_pricing: true
-```
-
-**Example: Complex validation**
-```yaml
-- abort:
-    condition:
-      - or:
-          - "{{ price < 0 }}"
-          - "{{ quantity < 1 }}"
-          - and:
-              - "{{ payment_method == 'credit_card' }}"
-              - not: "{{ credit_card.is_valid }}"
-    type: raise
-    message: "Order validation failed"
+    - task_name: eligible
+      skip_if:
+        or:
+          - '{{ is_banned }}'
+          - '{{ age < 13 }}'
+      set:
+        - eligible: true
 ```
 
 ---
 
-## Activities
+## Variable names (write targets)
 
-Activities are external functions or services executed by the workflow. They are registered with the engine and invoked by type identifier.
+A **write target** is a place where a variable is written: the keys of `context`, `set` and
+`output.set`, the value of `output.as`, and the keys of the `input` maps of `activity`,
+`workflow` and `rules_engine`. A target is a name with optional markers:
 
-### Built-in Activities
+```text
+target   :=  [_]name[@][#modifier...][#]
+          |  '{{ name[<key>]... }}'          # subscript assignment, set and output.set only
 
-#### Delay Activity
-
-```yaml
-- activity:
-    type: builtin.delay
-    input_data:
-      duration: 5s                   # 5 seconds
+name     :=  a letter, then letters, digits or _
+modifier :=  python | literal | jinja | python_glom
 ```
 
-#### HTTP Request Activity
+| Part | Meaning |
+|---|---|
+| `name` | Write to the workflow context |
+| `_name` | Write to the **task-local** scope: visible to the rest of this task, then discarded |
+| `name@` | Write to the **container scope**: the nearest enclosing `tasks` container or loop iteration |
+| `#modifier` | Evaluate the value with this [modifier](#evaluation-modifiers). Repeatable |
+| trailing `#` | Log the stored value as a debug event, shown by the `moco` CLI |
+
+Markers combine in that order: `greeting_html@#jinja#` is a container-scoped variable rendered
+with Jinja2 and logged.
 
 ```yaml
-- activity:
-    type: http.request
-    input_data:
-      method: GET
-      url: https://api.example.com/data
-      headers:
-        Authorization: "Bearer {{ token }}"
-      params:
-        limit: 10
-        offset: 0
-    output_name: api_response
-    retry_policy:
-      timeout_sec: 30
-      max_attempts: 3
+header:
+  schema_version: 2.0.0
+  workflow_name: write-targets-example
+
+input:
+  prices: [10, 20, 30]
+  tax_rate: 0.08
+
+output:
+  total: '{{ total }}'
+
+main:
+  tasks:
+    - task_name: subtotal
+      set:
+        - _sum: '{{ sum(prices) }}'                # task-local: only this task
+        - subtotal@: '{{ _sum }}'                  # container: later siblings
+    - task_name: total
+      set:
+        - _tax: '{{ round(subtotal * tax_rate, 2) }}'
+        - total#: '{{ subtotal + _tax }}'          # context, and logged
 ```
 
-**POST request with JSON body**
+Rules:
+
+- A name cannot both start with `_` and end with `@`.
+- A name cannot be `_` or a [reserved name](#reserved-names).
+- An unknown modifier (`#yaml`) is rejected when the wfspec is validated.
+- The scope markers `_` and `@` mean something only in `set`, `output.set` and `output.as`. In
+  `context` keys and `input` maps, only the modifiers and the trailing `#` apply.
+
+### Debug logging with a trailing `#`
+
+A trailing `#` emits a `data_log` debug event with the value that was stored. The `moco` CLI
+prints these events while the workflow runs, which makes it the main tool for inspecting a
+workflow. `_log#: '...'` is a common idiom: a throwaway task-local whose only purpose is the log
+line.
+
 ```yaml
-- activity:
+header:
+  schema_version: 2.0.0
+  workflow_name: debug-log-example
+
+input:
+  items: [a, b]
+
+main:
+  set:
+    - _log#: 'processing {{ len(items) }} items'
+    - first#: '{{ items[0] }}'
+```
+
+### Subscript assignment
+
+In `set` and `output.set`, a key written as an expression with literal subscripts assigns into an
+existing dict or list, instead of creating a variable. The root name must already be visible.
+
+```yaml
+header:
+  schema_version: 2.0.0
+  workflow_name: subscript-assignment-example
+
+context:
+  profile:
+    name: ''
+    address: {city: ''}
+
+main:
+  set:
+    - "{{ profile['name'] }}": Ada
+    - "{{ profile['address']['city'] }}": London
+```
+
+---
+
+## Shared task keys
+
+These keys can appear on a task of any kind.
+
+| Key | Type | Description |
+|---|---|---|
+| `task_name` | string | Identifies the task in logs, traces, debug events and tests. Unique within the document |
+| `skip_if` | [condition](#conditions) | When true, the task does not run |
+| `props` | mapping | Options; `execute_mode` and `join_type` configure a `tasks` container |
+| `output` | `{set, data, as}` | Processes the task's raw output into its result |
+| `on_error` | `{catch, do}` | Handles an error raised by the task |
+
+### `task_name`
+
+Optional, but name every task you want to find in a trace, mock in a test, or target with a unit
+test (a test's `step_name` refers to a `task_name`). Names must be unique across the whole
+document, including nested tasks and tasks inside `functions`.
+
+```yaml
+header:
+  schema_version: 2.0.0
+  workflow_name: task-name-example
+
+main:
+  task_name: build-greeting
+  set:
+    - greeting: hello
+```
+
+### `skip_if`
+
+When the condition is true, the task is skipped: it does not run, its result is `null`, and its
+`output` is not processed, so nothing is written. A later task that reads a variable the skipped
+task would have written must check for it, or the variable must be given a default in
+`context`.
+
+```yaml
+header:
+  schema_version: 2.0.0
+  workflow_name: skip-if-example
+
+context:
+  greeting: Hello, stranger!          # default for the skipped path
+
+input:
+  first_name: jon
+  last_name: doe
+
+output: '{{ greeting }}'
+
+main:
+  skip_if:
+    or:
+      - '{{ not first_name }}'
+      - '{{ not last_name }}'
+  set:
+    - greeting: 'Hello, {{ first_name }} {{ last_name }}!'
+```
+
+### `props`
+
+An open mapping. The engine reads two keys, and only on a `tasks` container:
+
+| Key | Values | Default | Description |
+|---|---|---|---|
+| `execute_mode` | `sequential`, `parallel` | `sequential` | How the container runs its children |
+| `join_type` | `all`, `any` | `all` | In parallel mode: wait for every child, or take the first to succeed |
+
+Other keys are kept for tools and UIs. A loop sets its iteration mode with `loop.execute_mode`,
+not with `props`. See [`tasks`](./statements.md#tasks).
+
+```yaml
+header:
+  schema_version: 2.0.0
+  workflow_name: props-example
+
+main:
+  task_name: two-at-once
+  props:
+    execute_mode: parallel
+    join_type: all
+    ui_group: demo                    # ignored by the engine
+  tasks:
+    - activity:
+        type: builtin.delay
+        input: {duration: 1s}
+    - activity:
+        type: builtin.delay
+        input: {duration: 2s}
+```
+
+### `output`
+
+Turns the task's raw output, `_`, into its **result**, and stores what you need. It has three
+optional parts, processed in this order:
+
+| Part | Description |
+|---|---|
+| `set` | An ordered list of assignments, exactly like a [`set`](./statements.md#set) task. `_` is the raw output |
+| `data` | The task's result. Defaults to `_`. Can use task-locals written by `output.set` |
+| `as` | A [write target](#variable-names-write-targets) that stores the result |
+
+```yaml
+header:
+  schema_version: 2.0.0
+  workflow_name: task-output-example
+
+output:
+  order: '{{ order }}'
+  last_order_id: '{{ last_order_id }}'
+
+main:
+  task_name: create-order
+  activity:
     type: http.request
-    input_data:
+    input:
       method: POST
-      url: https://api.example.com/orders
-      headers:
-        Content-Type: application/json
-      body:
-        order_id: "{{ order_id }}"
-        items: "{{ items }}"
-        total: "{{ total }}"
-    output_name: create_response
+      url: https://httpbin.org/post
+      json_data: {order_id: ORD-1, items: [{sku: A, qty: 2}]}
+      output_json: true
+  output:
+    set:
+      - _body: '{{ _["json"]["json"] }}'        # task-local
+      - last_order_id: '{{ _body["order_id"] }}'  # context write
+    data:
+      id: '{{ _body["order_id"] }}'
+      lines: '{{ len(_body["items"]) }}'
+    as: order
 ```
 
-### Activity Configuration
+- `output` never writes to the context by itself. A key of `_` becomes a variable only when
+  `output.set` or `output.as` writes it. A child workflow that returns `{currency: EUR}` does not
+  change your `currency` variable.
+- `as` honours the scope markers: `as: page@` stores in the enclosing container's scope. On a
+  `tasks` container itself, `@` in its own `output` refers to that container's scope, which ends
+  with it, so store a container's result in the context instead.
+- The result (from `data`, or `_`) is what the parent sees: an item of a `tasks` container's
+  result list, or one iteration's result in a `loop`.
+- On a container, `output` runs once, after all of its children.
 
-#### Static vs Dynamic Parameters
+### `on_error`
 
-- `config_data`: Static configuration (evaluated once at workflow start)
-- `input_data`: Dynamic input (evaluated each time activity runs)
+Handles an error raised by the task's kind or by its `output`. See
+[Errors and control signals](#errors-and-control-signals).
+
+| Key | Default | Description |
+|---|---|---|
+| `catch` | `false` | `true`: the error is consumed and the task succeeds. `false`: the error propagates after `do` runs |
+| `do` | none | A task to run when the error happens. Inside it, `_` is the error |
 
 ```yaml
-- activity:
-    type: custom.data_processor
-    config_data:                     # Static: API endpoint, credentials
-      endpoint: https://processor.example.com
-      api_key: "{{ env.API_KEY }}"
-    input_data:                      # Dynamic: per-execution data
-      data: "{{ current_batch }}"
-      options:
-        format: json
-    output_name: processed_data
-```
-
-#### Retry and Timeout
-
-Timeout and retry behavior is configured through a nested `retry_policy` block. It is
-honored only by the Temporal runtime (the in-memory runtime ignores it).
-
-```yaml
-- activity:
-    type: http.request
-    input_data:
-      url: https://unreliable-api.com/data
-    retry_policy:
-      timeout_sec: 10                     # Per-attempt (start-to-close) timeout
-      schedule_to_close_timeout_sec: 60   # Overall timeout across all attempts
-      heartbeat_timeout_sec: 5            # Heartbeat timeout (Temporal only)
-      max_attempts: 5                     # Total attempts (initial + retries); 0 = unlimited
-      initial_interval_sec: 1.0           # First retry backoff interval
-      backoff_coefficient: 2.0            # Exponential backoff multiplier
-      maximum_interval_sec: 30.0          # Cap on backoff interval
-      non_retryable_error_types:          # Error types that skip retries
-        - ValueError
-    output_name: result
-```
-
-- `timeout_sec` is the per-attempt execution timeout.
-- `max_attempts` is the total number of attempts (initial + retries), not just the retry count.
-
-#### Caching
-
-```yaml
-- activity:
-    type: http.request
-    input_data:
-      url: https://api.example.com/reference-data
-    enable_cache: true               # Enable result caching
-    cache_policy:
-      ttl_seconds: 3600              # Cache for 1 hour
-      cache_key: "reference_data_{{ date }}"
-    output_name: cached_data
-```
-
-#### Local Execution
-
-Force activity to run locally (bypass Temporal worker).
-
-```yaml
-- activity:
-    type: http.request
-    input_data:
-      url: http://localhost:8080/internal
-    execute_locally: true            # Run in workflow process
-    output_name: local_result
-```
-
-### Custom Activities
-
-Custom activities are registered with the engine via activity providers.
-
-**Example: Custom activity invocation**
-```yaml
-- activity:
-    type: myorg.send_email
-    version: 2.0.0
-    config_data:
-      smtp_host: smtp.example.com
-      smtp_port: 587
-    input_data:
-      to: "{{ customer.email }}"
-      subject: "Order Confirmation #{{ order_id }}"
-      body: "{{ email_body }}"
-      attachments:
-        - "{{ invoice_pdf }}"
-    output_name: email_result
-    retry_policy:
-      timeout_sec: 30
-```
-
----
-
-## State Machines
-
-State machines enable event-driven workflows with explicit states and transitions.
-
-### Basic State Machine
-
-```yaml
-state_machine:
-  name: order-fsm
-  initial_state: pending
-  timeout_sec: 300                   # Overall timeout
-
-  states:
-    - name: pending
-      on_enter:
-        transform:
-          output_data:
-            - status#: pending
-
-    - name: processing
-      timeout_sec: 60                # State-specific timeout
-      on_enter:
-        activity:
-          type: process-order
-          input_data:
-            order_id: "{{ order_id }}"
-          output_name: process_result
-
-    - name: completed
-      is_terminal: true              # End state
-      on_enter:
-        transform:
-          output_data:
-            - status#: completed
-
-    - name: failed
-      is_terminal: true
-      on_enter:
-        transform:
-          output_data:
-            - status#: failed
-
-  transitions:
-    - from_state: pending
-      to_state: processing
-      trigger:
-        event_type: start_processing
-
-    - from_state: processing
-      to_state: completed
-      trigger:
-        event_type: processing_complete
-
-    - from_state: processing
-      to_state: failed
-      trigger:
-        event_type: processing_failed
-```
-
-### State Configuration
-
-#### State Parameters
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `name` | string | Unique state identifier |
-| `is_terminal` | boolean | Mark as end state |
-| `timeout_sec` | integer | State-specific timeout |
-| `on_enter` | statement | Execute when entering state |
-| `on_exit` | statement | Execute when exiting state |
-
-#### State Callbacks
-
-```yaml
-states:
-  - name: processing
-    on_enter:                        # Runs when entering state
-      sequence:
-        elements:
-          - transform:
-              output_data:
-                - entered_at: "{{ now() }}"
-          - emit_event:
-              input_data:
-                topic: state_events
-                data:
-                  state: processing
-
-    on_exit:                         # Runs when leaving state
-      transform:
-        output_data:
-          - exited_at: "{{ now() }}"
-```
-
-### Transitions
-
-Transitions define how the state machine moves between states.
-
-#### Basic Transition
-
-```yaml
-transitions:
-  - from_state: pending
-    to_state: approved
-    trigger:
-      event_type: approve
-```
-
-#### Transition with Condition
-
-```yaml
-transitions:
-  - from_state: pending
-    to_state: processing
-    trigger:
-      event_type: start_processing
-      condition:
-        and:
-          - "{{ event.data.get('price') > 0 }}"
-          - "{{ event.data.get('inventory_available') == true }}"
-```
-
-#### Multiple Transitions from Same State
-
-```yaml
-transitions:
-  - from_state: processing
-    to_state: completed
-    trigger:
-      event_type: success
-
-  - from_state: processing
-    to_state: failed
-    trigger:
-      event_type: error
-
-  - from_state: processing
-    to_state: pending
-    trigger:
-      event_type: retry
-```
-
-### Global Triggers
-
-A transition that omits `from_state` applies from any state.
-
-```yaml
-state_machine:
-  name: order-fsm
-  initial_state: pending
-
-  states:
-    - name: pending
-    - name: processing
-    - name: cancelled
-      is_terminal: true
-    - name: failed
-      is_terminal: true
-
-  transitions:
-    # A transition with no from_state is a wildcard: it fires from any state.
-    # State-specific transitions are matched first; wildcards are the fallback.
-    - to_state: cancelled
-      trigger:
-        event_type: cancel
-
-    - to_state: failed
-      trigger:
-        event_type: critical_error
-```
-
-### Event Source Configuration
-
-Specify event topic for state machine events.
-
-```yaml
-state_machine:
-  name: order-fsm
-  event_source_topic: order_events   # Listen to this topic
-  initial_state: pending
-
-  states:
-    - name: pending
-
-  transitions:
-    - from_state: pending
-      to_state: processing
-      trigger:
-        event_type: start              # Listen for "start" event on order_events topic
-```
-
-### Complete State Machine Example
-
-```yaml
-body:
-  sequence:
-    elements:
-      # Initialize order
-      - transform:
-          output_data:
-            - order_id: "{{ input.order_id }}"
-            - order_data: "{{ input.order_data }}"
-
-      # Run state machine
-      - state_machine:
-          name: order-processor
-          initial_state: validating
-          timeout_sec: 600
-          event_source_topic: order_events
-
-          states:
-            - name: validating
-              timeout_sec: 30
-              on_enter:
-                sequence:
-                  elements:
-                    - transform:
-                        output_data:
-                          - status: validating
-                    - activity:
-                        type: validate-order
-                        input_data:
-                          order: "{{ order_data }}"
-                        output_name: validation_result
-                    - emit_event:
-                        input_data:
-                          topic: order_events
-                          event_type: "{{ 'validated' if validation_result.valid else 'validation_failed' }}"
-                          data:
-                            order_id: "{{ order_id }}"
-
-            - name: processing
-              timeout_sec: 120
-              on_enter:
-                sequence:
-                  elements:
-                    - transform:
-                        output_data:
-                          - status: processing
-                    - activity:
-                        type: process-payment
-                        input_data:
-                          order: "{{ order_data }}"
-                        output_name: payment_result
-                    - emit_event:
-                        input_data:
-                          topic: order_events
-                          event_type: "{{ 'payment_complete' if payment_result.success else 'payment_failed' }}"
-                            order_id: "{{ order_id }}"
-
-            - name: fulfilling
-              timeout_sec: 300
-              on_enter:
-                sequence:
-                  elements:
-                    - transform:
-                        output_data:
-                          - status: fulfilling
-                    - activity:
-                        type: create-shipment
-                        input_data:
-                          order: "{{ order_data }}"
-                        output_name: shipment_result
-                    - emit_event:
-                        input_data:
-                          topic: order_events
-                          event_type: fulfilled
-                          data:
-                            order_id: "{{ order_id }}"
-                            tracking: "{{ shipment_result.tracking_number }}"
-
-            - name: completed
-              is_terminal: true
-              on_enter:
-                transform:
-                  output_data:
-                    - status: completed
-                    - completed_at: "{{ now() }}"
-
-            - name: failed
-              is_terminal: true
-              on_enter:
-                transform:
-                  output_data:
-                    - status: failed
-                    - failed_at: "{{ now() }}"
-
-          transitions:
-            - from_state: validating
-              to_state: processing
-              trigger:
-                event_type: validated
-
-            - from_state: validating
-              to_state: failed
-              trigger:
-                event_type: validation_failed
-
-            - from_state: processing
-              to_state: fulfilling
-              trigger:
-                event_type: payment_complete
-
-            - from_state: processing
-              to_state: failed
-              trigger:
-                event_type: payment_failed
-
-            - from_state: fulfilling
-              to_state: completed
-              trigger:
-                event_type: fulfilled
-
-            # No from_state -> fires from any state
-            - to_state: failed
-              trigger:
-                event_type: cancel
-```
-
----
-
-## Events
-
-Moco supports event-driven workflows with `wait_for` and `emit_event` statements.
-
-### Emit Event
-
-Send events to the event bus.
-
-```yaml
-- emit_event:
-    input_data:
-      topic: notifications             # Event topic
-      data:                            # Event payload
-        type: order_created
-        order_id: "{{ order_id }}"
-        timestamp: "{{ now() }}"
-```
-
-#### Target Specific Workflow
-
-```yaml
-- emit_event:
-    input_data:
-      topic: child_events
-      target_workflow_id: "{{ parent_workflow_id }}"
-      event_type: child_complete
-      data:
-        result: "{{ processing_result }}"
-```
-
-#### Event Metadata
-
-```yaml
-- emit_event:
-    input_data:
-      topic: analytics_events
-      data:
-        action: page_view
-        page: "/products"
-      metadata:
-        priority: low
-        source: web_app
-```
-
-### Wait For Event
-
-Wait for events matching criteria.
-
-```yaml
-- wait_for:
-    event:
-      topic: order_events
-      match_expression: "{{ event.data.get('order_id') == order_id }}"
-    timeout_sec: 60
-    output_name: received_event
-```
-
-#### Event Structure
-
-Events received by `wait_for` have this structure:
-
-```python
-{
-  "data": {...},              # Event payload
-  "topic": "...",             # Event topic
-  "source_workflow_id": "...", # Source workflow
-  "metadata": {...}           # Event metadata
-}
-```
-
-#### Event Filtering
-
-```yaml
-- wait_for:
-    event:
-      topic: payment_events
-      match_expression: >
-        {{ event.data.get('transaction_id') == transaction_id and
-           event.data.get('status') == 'completed' }}
-    timeout_sec: 120
-    output_name: payment_event
-```
-
-### Multi-Agent Pattern
-
-Coordinate multiple workflows with events.
-
-**Parent Workflow:**
-```yaml
-wfspec_name: parent-orchestrator
-wfspec_version: 1.0.0
+header:
+  schema_version: 2.0.0
+  workflow_name: on-error-example
 
 context:
-  child_workflow_ids: []
+  error: null
 
-body:
-  sequence:
-    elements:
-      # Start child workflows
-      - iteration:
-          iter_type: parallel
-          input_data: "{{ agent_configs }}"
-          body:
-            sequence:
-              elements:
-                - workflow:
-                    wfspec:
-                      name: child-agent
-                      version: 1.0.0
-                    child_mode: async
-                    execute_options:
-                      workflow_id: "child-{{ iter_item.agent_id }}"
-                    input_data:
-                      config: "{{ iter_item }}"
-                      parent_workflow_id: "{{ __sys_info__['workflow_id'] }}"
-                    output_name: child_info
-                - transform:
-                    output_data:
-                      - _tmp: "{{ child_workflow_ids.append(child_info.workflow_id) }}"
+input:
+  first_name:
 
-      # Wait for all children to complete
-      - iteration:
-          iter_type: sequence
-          input_data: "{{ child_workflow_ids }}"
-          body:
-            wait_for:
-              event:
-                topic: child_events
-                match_expression: >
-                  {{ event['event_type'] == 'complete' and
-                     event['source'] == iter_item }}
-              timeout_sec: 300
-              output_name: child_result
-```
+output:
+  error: '{{ error }}'
 
-**Child Workflow:**
-```yaml
-wfspec_name: child-agent
-wfspec_version: 1.0.0
-
-input_data:
-  config:
-  parent_workflow_id:
-
-body:
-  sequence:
-    elements:
-      # Do work
-      - activity:
-          type: process-data
-          input_data:
-            config: "{{ config }}"
-          output_name: result
-
-      # Notify parent
-      - emit_event:
-          input_data:
-            topic: child_events
-            target_workflow_id: "{{ parent_workflow_id }}"
-            event_type: complete
-            data:
-              result: "{{ result }}"
+main:
+  task_name: validate
+  raise:
+    if: '{{ not first_name }}'
+    type: error
+    error_type: ValidationError
+    message: first_name is missing
+  on_error:
+    catch: true
+    do:
+      set:
+        - error#: '{{ _["error_type"] }}: {{ _["error_message"] }}'
 ```
 
 ---
 
-## Child Workflows
+## How a task runs
 
-Execute workflows within workflows with different execution modes.
+For every task, the engine runs these steps in order:
 
-### Nested Mode
+1. **Guard.** Evaluate `skip_if`. If it is true, the task's result is `null` and the task ends.
+   A `raise` task also evaluates its `if` here; if it is false, the result is `null`.
+2. **Run.** Execute the kind and bind `_` to its raw output.
+3. **Errors.** If step 2 or steps 4 to 6 fail, hand the error to `on_error`.
+4. **`output.set`.** Process the assignments in order.
+5. **`output.data`.** Evaluate it, or use `_`. This is the task's **result**.
+6. **`output.as`.** Store the result.
+7. **Clean up.** Discard the task's local scope and return the result to the parent.
 
-Child runs in parent's context (shares variables).
+Consequences:
 
-```yaml
-- workflow:
-    wfspec:
-      name: calculate-tax
-      version: 1.0.0
-    child_mode: inline              # Shares parent context
-    input_data:
-      price: "{{ item_price }}"
-    output_name: tax_amount
-```
-
-**Use case:** Reusable logic that needs access to parent variables.
-
-### Break Away Sync
-
-Child runs independently, parent waits for completion.
-
-```yaml
-- workflow:
-    wfspec:
-      name: process-order
-      version: 1.0.0
-    child_mode: sync     # Independent, synchronous
-    input_data:
-      order_id: "{{ order_id }}"
-      items: "{{ cart_items }}"
-    output_name: order_result
-```
-
-**Use case:** Long-running child that shouldn't block other workflows, but parent needs result.
-
-### Break Away Async
-
-Child runs independently, parent waits for start only.
-
-```yaml
-- workflow:
-    wfspec:
-      name: send-notifications
-      version: 1.0.0
-    child_mode: async    # Independent, async
-    input_data:
-      recipients: "{{ email_list }}"
-      message: "{{ notification_body }}"
-    output_name: workflow_info      # Contains workflow_id, not result
-```
-
-**Use case:** Fire-and-forget background tasks where you need workflow ID but not result.
-
-### Break Away Detached
-
-Child runs completely independently.
-
-```yaml
-- workflow:
-    wfspec:
-      name: analytics-job
-      version: 1.0.0
-    child_mode: detached # Independent, detached
-    input_data:
-      data: "{{ analytics_data }}"
-```
-
-**Use case:** Background tasks where parent doesn't care about workflow ID or result.
-
-### Inline Child Workflow
-
-Define workflow inline instead of by reference.
-
-```yaml
-- workflow:
-    wfspec:
-      content:
-        wfspec_name: inline-calculator
-        wfspec_version: 1.0.0
-        input_data:
-          x:
-          y:
-        output_name: sum
-        body:
-          transform:
-            output_data:
-              - sum: "{{ x + y }}"
-    child_mode: inline
-    input_data:
-      x: 10
-      y: 20
-    output_name: result              # 30
-```
-
-### Execution Options
-
-Customize child workflow execution.
-
-```yaml
-- workflow:
-    wfspec:
-      name: data-processor
-      version: 1.0.0
-    child_mode: sync
-    execute_options:
-      workflow_id: "data-proc-{{ batch_id }}"  # Custom workflow ID
-      task_queue: high-priority                # Custom task queue
-      retry_policy:
-        timeout_sec: 1800                      # Workflow run timeout
-    input_data:
-      batch_id: "{{ batch_id }}"
-      data: "{{ batch_data }}"
-    output_name: processed_data
-```
-
-### Parent-Child Communication
-
-Children can access parent workflow ID and communicate via events.
-
-**Parent:**
-```yaml
-- workflow:
-    wfspec:
-      name: child-worker
-      version: 1.0.0
-    child_mode: async
-    execute_options:
-      workflow_id: "worker-{{ task_id }}"
-    input_data:
-      task: "{{ task_data }}"
-      parent_id: "{{ __sys_info__['workflow_id'] }}"
-    output_name: worker_info
-
-- wait_for:
-    event:
-      topic: worker_events
-      match_expression: >
-        {{ event.source_workflow_id == worker_info.workflow_id and
-           event.data.get('status') == 'complete' }}
-    timeout_sec: 300
-    output_name: completion_event
-```
-
-**Child:**
-```yaml
-body:
-  sequence:
-    elements:
-      - activity:
-          type: process-task
-          input_data:
-            task: "{{ task }}"
-          output_name: result
-
-      - emit_event:
-          input_data:
-            topic: worker_events
-            target_workflow_id: "{{ parent_id }}"
-            data:
-              status: complete
-              result: "{{ result }}"
-```
+- A skipped task writes nothing, and its `output` does not run.
+- Task-locals (`_name`) written by a `set` task are still visible in that task's `output`.
+- A control signal (`raise: exit`, `break`, `continue`, `terminate`) skips steps 4 to 6 of every
+  task it passes through.
 
 ---
 
-## Complete Examples
+## Scopes and name resolution
 
-### Example 1: E-commerce Order Processing
+### The three scopes
 
-```yaml
-wfspec_name: order-processing
-wfspec_version: 1.0.0
+| Written as | Scope | Visible to | Lifetime |
+|---|---|---|---|
+| `name` | **Workflow context** | Every later task and the workflow's `output` | The whole run; saved on checkpoint |
+| `name@` | **Container scope**: the nearest enclosing `tasks` container or loop iteration | Later siblings and their descendants | Until that container or iteration ends |
+| `_name` | **Task-local** | The rest of the same task: later `set` entries, `output.set`, `output.data`, `output.as` | Until the task ends |
 
-context:
-  status: pending
-  order_total: 0
-  tax_amount: 0
+A `name@` written outside any container lands in the workflow's root scope: readable by every task,
+but not part of the workflow context or the checkpointed state.
 
-input_data:
-  order_id:
-  customer_id:
-  items:
-  payment_info:
+### Reading a name
 
-output_name: order_result
+A bare name is looked up innermost first:
 
-body:
-  sequence:
-    elements:
-      # Validate order
-      - transform:
-          name: validate-order
-          condition:
-            - and:
-                - "{{ len(items) > 0 }}"
-                - "{{ customer_id != '' }}"
-          output_data:
-            - status: validating
+1. the [special names](#special-names) (`_`, `__context__`, `event`, ...);
+2. the current task's local scope;
+3. the container scopes, from the innermost outwards;
+4. the workflow context.
 
-      - abort:
-          condition:
-            - not:
-                - "{{ len(items) > 0 }}"
-          type: raise
-          message: "Order must contain at least one item"
+The first match wins, so a container-scoped `discount@` hides a `discount` in the context for as
+long as its container runs. An unknown name fails with `NameError`. `__context__` holds the same
+merge as a mapping; test membership with `"x" in __context__`.
 
-      # Calculate totals in parallel
-      - parallel:
-          name: calculate-totals
-          join_type: and
-          elements:
-            - transform:
-                name: calculate-subtotal
-                output_data:
-                  - subtotal: "{{ sum([item['price'] * item['quantity'] for item in items]) }}"
+Writing `name` always writes the context, even when a scoped `name@` hides it: readers inside the
+scope keep seeing the scoped value.
 
-            - transform:
-                name: calculate-tax
-                output_data:
-                  - tax_amount: "{{ subtotal * 0.08 if 'subtotal' in _ else 0 }}"
+### Container scopes in loops and parallel tasks
 
-            - activity:
-                name: check-inventory
-                type: inventory.check
-                input_data:
-                  items: "{{ items }}"
-                output_name: inventory_check
-
-      - abort:
-          condition: "{{ not inventory_check.available }}"
-          type: raise
-          message: "Insufficient inventory"
-
-      - transform:
-          output_data:
-            - order_total: "{{ subtotal + tax_amount }}"
-            - status: processing
-
-      # Process payment
-      - activity:
-          name: charge-payment
-          type: payment.charge
-          input_data:
-            amount: "{{ order_total }}"
-            payment_info: "{{ payment_info }}"
-            customer_id: "{{ customer_id }}"
-          retry_policy:
-            timeout_sec: 30
-            max_attempts: 3
-          output_name: payment_result
-
-      - abort:
-          condition: "{{ not payment_result.success }}"
-          type: raise
-          message: "Payment failed: {{ payment_result.error }}"
-
-      - transform:
-          output_data:
-            - transaction_id: "{{ payment_result.transaction_id }}"
-            - status: paid
-
-      # Create shipment
-      - activity:
-          name: create-shipment
-          type: shipping.create
-          input_data:
-            order_id: "{{ order_id }}"
-            items: "{{ items }}"
-            customer_id: "{{ customer_id }}"
-          output_name: shipment_result
-
-      - transform:
-          output_data:
-            - tracking_number: "{{ shipment_result.tracking_number }}"
-            - status: shipped
-
-      # Send notifications in parallel
-      - parallel:
-          name: send-notifications
-          join_type: and
-          elements:
-            - activity:
-                type: notification.email
-                input_data:
-                  to: "{{ customer_email }}"
-                  template: order_confirmation
-                  data:
-                    order_id: "{{ order_id }}"
-                    tracking: "{{ tracking_number }}"
-                    total: "{{ order_total }}"
-
-            - activity:
-                type: notification.sms
-                input_data:
-                  to: "{{ customer_phone }}"
-                  message: "Your order {{ order_id }} has shipped. Track at: {{ tracking_url }}"
-
-      # Finalize
-      - transform:
-          output_data:
-            - status: completed
-            - order_result:
-                order_id: "{{ order_id }}"
-                status: "{{ status }}"
-                total: "{{ order_total }}"
-                tracking: "{{ tracking_number }}"
-                transaction_id: "{{ transaction_id }}"
-```
-
-### Example 2: Data Pipeline with Iteration
+Every loop iteration opens a fresh container scope holding the loop variable (`foreach`, and
+`index` if named). Values written with `@` inside an iteration stay private to it, so iterations
+never overwrite each other's temporaries, even in parallel.
 
 ```yaml
-wfspec_name: data-processing-pipeline
-wfspec_version: 1.0.0
+header:
+  schema_version: 2.0.0
+  workflow_name: scopes-example
 
-context:
-  processed_count: 0
-  failed_count: 0
-  results: []
+input:
+  orders:
+    - {id: order-1, amount: 150.0}
+    - {id: order-2, amount: 49.99}
 
-input_data:
-  data_source:
-  batch_size: 100
+output:
+  processed: '{{ processed }}'
+  leaked: '{{ leaked }}'
 
-output_name: pipeline_result
+main:
+  tasks:
+    - task_name: price-orders
+      loop:
+        in: '{{ orders }}'
+        foreach: order
+        execute_mode: parallel
+        do:
+          tasks:
+            - set:
+                - discount@: '{{ 0.10 if order["amount"] >= 100 else 0.0 }}'
+            - set:
+                - final@: '{{ round(order["amount"] * (1 - discount), 2) }}'
+          output:
+            data: {id: '{{ order["id"] }}', final: '{{ final }}'}
+      output:
+        as: processed
 
-body:
-  sequence:
-    elements:
-      # Fetch data
-      - activity:
-          name: fetch-data
-          type: data.fetch
-          input_data:
-            source: "{{ data_source }}"
-            limit: 1000
-          output_name: raw_data
-
-      # Split into batches
-      - transform:
-          name: create-batches
-          output_data:
-            - batches: "{{ [raw_data.records[i:i+batch_size] for i in range(0, len(raw_data.records), batch_size)] }}"
-
-      # Process batches in parallel
-      - iteration:
-          name: process-batches
-          iter_type: parallel
-          join_type: and
-          input_data: "{{ enumerate(batches) }}"
-          body:
-            sequence:
-              elements:
-                - transform:
-                    output_data:
-                      - batch_index: "{{ iter_item[0] }}"
-                      - batch_data: "{{ iter_item[1] }}"
-                      - batch_id#: "batch-{{ batch_index }}"
-
-                # Process each record in batch sequentially
-                - iteration:
-                    iter_type: sequence
-                    input_data: "{{ batch_data }}"
-                    body:
-                      sequence:
-                        elements:
-                          - activity:
-                              type: data.transform
-                              input_data:
-                                record: "{{ iter_item }}"
-                              output_name: transformed
-                              retry_policy:
-                                max_attempts: 2
-
-                          - activity:
-                              type: data.validate
-                              input_data:
-                                record: "{{ transformed }}"
-                              output_name: validated
-
-                          - transform:
-                              condition: "{{ validated.is_valid }}"
-                              output_data:
-                                - _tmp: "{{ results.append(transformed) }}"
-                                - _count@: "{{ processed_count + 1 }}"
-                                - processed_count: "{{ _count }}"
-
-                          - transform:
-                              condition: "{{ not validated.is_valid }}"
-                              output_data:
-                                - _count@: "{{ failed_count + 1 }}"
-                                - failed_count: "{{ _count }}"
-                                - _log#: "Failed validation: {{ validated.errors }}"
-
-      # Store results
-      - activity:
-          name: store-results
-          type: data.store
-          input_data:
-            records: "{{ results }}"
-            destination: "{{ data_source }}_processed"
-          output_name: store_result
-
-      # Create summary
-      - transform:
-          output_data:
-            - pipeline_result:
-                total_records: "{{ len(raw_data.records) }}"
-                processed: "{{ processed_count }}"
-                failed: "{{ failed_count }}"
-                batches: "{{ len(batches) }}"
-                success_rate: "{{ (processed_count / len(raw_data.records) * 100) if len(raw_data.records) > 0 else 0 }}"
+    # order, discount and final are gone; only processed is left.
+    - set:
+        - leaked: '{{ [n for n in ("order", "discount", "final") if n in __context__] }}'
 ```
 
-### Example 3: Multi-Agent Orchestration
+In a parallel `tasks` container or parallel loop, each child or iteration works on its own copy of
+the enclosing container scopes, so siblings cannot see each other's `@` writes. Writes to the
+workflow context are applied as the children finish.
 
-```yaml
-wfspec_name: multi-agent-orchestrator
-wfspec_version: 1.0.0
+### Boundaries
 
-context:
-  agent_results: {}
-  all_agents_complete: false
-
-input_data:
-  task_description:
-  agent_configs:
-    - agent_id: analyzer
-      type: data-analysis
-      priority: 1
-    - agent_id: processor
-      type: data-processing
-      priority: 2
-    - agent_id: reporter
-      type: report-generation
-      priority: 3
-
-output_name: orchestration_result
-
-body:
-  sequence:
-    elements:
-      # Start all agents
-      - iteration:
-          iter_type: parallel
-          join_type: and
-          input_data: "{{ agent_configs }}"
-          body:
-            workflow:
-              wfspec:
-                name: agent-worker
-                version: 1.0.0
-              child_mode: async
-              execute_options:
-                workflow_id: "agent-{{ iter_item['agent_id'] }}-{{ __sys_info__['workflow_id'] }}"
-              input_data:
-                agent_id: "{{ iter_item['agent_id'] }}"
-                config: "{{ iter_item }}"
-                task: "{{ task_description }}"
-                orchestrator_id: "{{ __sys_info__['workflow_id'] }}"
-              output_name: agent_info
-
-      # Monitor agent progress
-      - state_machine:
-          name: agent-coordinator
-          initial_state: waiting
-          timeout_sec: 600
-          event_source_topic: agent_events
-
-          states:
-            - name: waiting
-              on_enter:
-                transform:
-                  output_data:
-                    - coordination_status: waiting_for_agents
-
-            - name: processing
-              on_enter:
-                transform:
-                  output_data:
-                    - coordination_status: agents_processing
-
-            - name: completed
-              is_terminal: true
-              on_enter:
-                transform:
-                  output_data:
-                    - all_agents_complete: true
-                    - coordination_status: all_complete
-
-          transitions:
-            - from_state: waiting
-              to_state: processing
-              trigger:
-                event_type: agent_started
-                condition: "{{ event.data.get('agent_id') in [a['agent_id'] for a in agent_configs] }}"
-
-            - from_state: processing
-              to_state: processing
-              trigger:
-                event_type: agent_progress
-                condition: "{{ event.data.get('agent_id') != '' }}"
-
-            - from_state: processing
-              to_state: completed
-              trigger:
-                event_type: agent_complete
-                condition: "{{ len(agent_results) == len(agent_configs) }}"
-
-            # No from_state -> fires from any state
-            - to_state: failed
-              trigger:
-                event_type: agent_failed
-
-      # Aggregate results
-      - transform:
-          output_data:
-            - orchestration_result:
-                task: "{{ task_description }}"
-                agents: "{{ len(agent_configs) }}"
-                results: "{{ agent_results }}"
-                status: "{{ coordination_status }}"
-```
-
-**Agent Worker Workflow:**
-```yaml
-wfspec_name: agent-worker
-wfspec_version: 1.0.0
-
-input_data:
-  agent_id:
-  config:
-  task:
-  orchestrator_id:
-
-output_name: agent_result
-
-body:
-  sequence:
-    elements:
-      # Notify start
-      - emit_event:
-          input_data:
-            topic: agent_events
-            target_workflow_id: "{{ orchestrator_id }}"
-            event_type: agent_started
-            data:
-              agent_id: "{{ agent_id }}"
-
-      # Do work
-      - activity:
-          type: "{{ config['type'] }}"
-          input_data:
-            task: "{{ task }}"
-            config: "{{ config }}"
-          timeout_sec: 300
-          output_name: work_result
-
-      # Send progress
-      - emit_event:
-          input_data:
-            topic: agent_events
-            target_workflow_id: "{{ orchestrator_id }}"
-            event_type: agent_progress
-            data:
-              agent_id: "{{ agent_id }}"
-              progress: 50
-
-      # Finalize
-      - transform:
-          output_data:
-            - agent_result:
-                agent_id: "{{ agent_id }}"
-                result: "{{ work_result }}"
-                status: complete
-
-      # Notify completion
-      - emit_event:
-          input_data:
-            topic: agent_events
-            target_workflow_id: "{{ orchestrator_id }}"
-            event_type: agent_complete
-            data:
-              agent_id: "{{ agent_id }}"
-              result: "{{ agent_result }}"
-```
+| Boundary | What is visible inside |
+|---|---|
+| `workflow` child and `function` call | Only the child's own `input`, as a fresh context. Nothing from the caller |
+| State machine `on_enter`, `on_exit`, `action`, `condition` | The workflow context and `event`. Container scopes around the state machine are not visible |
+| Rules engine rule expressions | The facts, as bare names |
+| Rules engine `actions` | The workflow context, like a state machine callback |
 
 ---
 
-## Best Practices
+## Errors and control signals
 
-### 1. Variable Naming
+### Errors
 
-- Use descriptive names: `customer_email` not `ce`
-- Use snake_case for consistency
-- Use `@` suffix for temporary variables
-- Use `#` suffix for debug logging
+An error fails the task that raised it, and propagates to the parent unless something handles it.
+Errors come from activities, child workflows, expressions (`NameError`, a bad subscript, ...),
+`raise` with `type: error`, and the engine itself. A failed activity is retried first, according
+to its [retry policy](#retry-policy); only the final failure counts.
 
-### 2. Error Handling
+`on_error` on a task handles an error raised by its kind or by its `output`:
+
+| `on_error` | What happens |
+|---|---|
+| absent | The error propagates to the parent task |
+| `do` present | `do` runs in the task's place, in the same scopes. Inside `do`, `_` is the error |
+| `catch: true` | The error is consumed. The task succeeds with `do`'s result (or `null` without `do`). The task's own `output` is **not** applied, because it assumes success; use `do`'s `output` to store something |
+| `catch: false` (default) | After `do` completes, the original error keeps propagating. Use it for cleanup and compensation |
+
+The error, bound to `_` inside `do`:
+
+| Key | Description |
+|---|---|
+| `error_type` | The error's type name, such as `ActivityError` or a `raise` task's `error_type` |
+| `error_message` | The message |
+| `error_detail` | Extra detail, when available |
+
+More rules:
+
+- An error raised inside `do` replaces the original error and propagates.
+- An error while evaluating `skip_if` is not handled by the task's own `on_error`.
+- A container's `on_error` handles any error a child let through.
+- `on_error` catches every error type. To handle only some, catch, store the error and re-raise
+  the others with `raise`.
 
 ```yaml
-# Validate inputs early
-- abort:
-    condition:
-      - or:
-          - "{{ price < 0 }}"
-          - "{{ quantity < 1 }}"
-    type: raise
-    message: "Invalid input: price={{ price }}, quantity={{ quantity }}"
+header:
+  schema_version: 2.0.0
+  workflow_name: error-handling-example
 
-# Use retries for unreliable operations
-- activity:
-    type: external.api
-    input_data:
-      url: "{{ endpoint }}"
-    retry_policy:
-      timeout_sec: 10
+context:
+  reservation: null
+  checkout_error: null
+
+input:
+  fail_payment: true
+
+output:
+  reservation: '{{ reservation }}'
+  checkout_error: '{{ checkout_error }}'
+
+main:
+  tasks:
+    - task_name: reserve-stock
+      set:
+        - reservation: {sku: SKU-A, qty: 1}
+
+    - task_name: checkout
+      tasks:
+        - task_name: charge-card
+          raise:
+            if: '{{ fail_payment }}'
+            type: error
+            error_type: PaymentDeclined
+            message: card declined
+          on_error:
+            # catch: false (the default): compensate, then let the error propagate.
+            do:
+              task_name: release-stock
+              set:
+                - reservation: null
+        - task_name: confirm
+          set:
+            - _log#: payment charged          # not reached when charge-card fails
+      # The container catches what its children let through.
+      on_error:
+        catch: true
+        do:
+          set:
+            - checkout_error#: '{{ _ }}'
+
+    - task_name: rethrow-unexpected
+      raise:
+        if: '{{ checkout_error is not None and checkout_error["error_type"] != "PaymentDeclined" }}'
+        type: error
+        error_type: CheckoutError
+        message: '{{ checkout_error["error_message"] }}'
+```
+
+### Control signals
+
+`raise` with a type other than `error` sends a **control signal**. A signal is not an error:
+`on_error` never sees it, and the tasks it unwinds through skip their `output`.
+
+| `raise.type` | Effect |
+|---|---|
+| `error` (default) | Fails with `error_type` (default `WorkflowError`) and `message` |
+| `terminate` | Stops the whole workflow. The run completes **successfully**; `output` is evaluated and gets `terminate_message` |
+| `exit` | Leaves the nearest enclosing `tasks` container, which completes; execution continues after it |
+| `break` | Leaves the nearest enclosing `loop`, which completes with the results collected so far |
+| `continue` | Ends the current loop iteration (from any depth inside it) with result `null`; the next one starts |
+
+`exit` must be inside a `tasks` container, and `break` and `continue` inside a `loop`, without
+crossing a `workflow` / `function` boundary or a state machine callback. The validator checks
+this.
+
+```yaml
+header:
+  schema_version: 2.0.0
+  workflow_name: control-signals-example
+
+context:
+  kept: []
+
+input:
+  numbers: [1, -2, 3, 0, 5]
+
+output:
+  kept: '{{ kept }}'                  # [1, 3]
+
+main:
+  tasks:
+    - task_name: nothing-to-do
+      raise:
+        if: '{{ len(numbers) == 0 }}'
+        type: terminate
+        message: no numbers given
+
+    - task_name: filter
+      loop:
+        in: '{{ numbers }}'
+        foreach: n
+        do:
+          tasks:
+            - raise:
+                if: '{{ n < 0 }}'
+                type: continue        # skip negatives
+            - raise:
+                if: '{{ n == 0 }}'
+                type: break           # stop at the first zero
+            - set:
+                - kept: '{{ kept + [n] }}'
+```
+
+### Error types
+
+The `error_type` an `on_error` handler sees is one of:
+
+| `error_type` | Raised when |
+|---|---|
+| any name you choose | A `raise` task with `error_type` set |
+| `WorkflowError` | A `raise` task without `error_type` |
+| `ConditionTypeError` | A condition evaluated to something other than a `bool` |
+| `LoopTypeError` | `loop.in` did not evaluate to an iterable |
+| `NameError` | An expression read a name that is not defined |
+| the activity's own type | An activity failed after its retries, for example `ValueError` for an invalid input |
+| the child's error type | A child workflow or function failed; its error propagates with its own type |
+
+`AbortError` is the conventional type for "stop this run as aborted":
+`raise: {type: error, error_type: AbortError, message: ...}`.
+
+A `wait_for` timeout is **not** an error: its result is `null`.
+
+---
+
+## Retry policy
+
+A retry policy controls the timeouts and retries of an activity, or of a `sync` child workflow. It
+is applied by the Temporal runtime; the in-memory runtime ignores it.
+
+An activity's effective policy is `header.metadata.default_activity_retry_policy` with the
+activity's own `options.retry_policy` laid over it, field by field.
+
+| Field | Description |
+|---|---|
+| `timeout_sec` | Timeout of one attempt |
+| `schedule_to_close_timeout_sec` | Overall timeout, across all attempts |
+| `heartbeat_timeout_sec` | Fail an attempt that has not heartbeated for this long |
+| `heartbeat_interval_sec` | How often the activity heartbeats. Heartbeating is on only when both heartbeat fields are set |
+| `max_attempts` | Total attempts, the first one included. `0` means unlimited |
+| `initial_interval_sec` | Wait before the first retry |
+| `backoff_coefficient` | Multiplier applied to the wait after each retry |
+| `maximum_interval_sec` | Upper bound on the wait between retries |
+| `non_retryable_error_types` | Error types that fail immediately, without retrying |
+
+```yaml
+header:
+  schema_version: 2.0.0
+  workflow_name: retry-policy-example
+  metadata:
+    default_activity_retry_policy:
       max_attempts: 3
-    output_name: result
-```
+      initial_interval_sec: 1
+      timeout_sec: 60
 
-### 3. Performance
-
-```yaml
-# Use parallel for independent operations
-- parallel:
-    join_type: and
-    elements:
-      - activity:
-          type: fetch.users
-          output_name: users
-      - activity:
-          type: fetch.products
-          output_name: products
-      - activity:
-          type: fetch.orders
-          output_name: orders
-
-# Use container scope to avoid saving unnecessary data
-- transform:
-    output_data:
-      - large_dataset@: "{{ load_data() }}"      # Don't save
-      - summary: "{{ compute_summary(large_dataset) }}"  # Save only summary
-```
-
-### 4. Modularity
-
-```yaml
-# Extract reusable logic into child workflows
-- workflow:
-    wfspec:
-      name: calculate-shipping
-      version: 1.0.0
-    child_mode: inline
-    input_data:
-      weight: "{{ total_weight }}"
-      destination: "{{ shipping_address }}"
-    output_name: shipping_cost
-```
-
-### 5. Debugging
-
-```yaml
-# Use debug logging
-- transform:
-    output_data:
-      - input_data#: "{{ input }}"              # Log input
-      - intermediate@#: "{{ step1() }}"         # Log temp value
-      - result#: "{{ final_calc(intermediate) }}" # Log result
-
-# Use meaningful names
-- activity:
-    name: fetch-customer-data                   # Not "step1"
-    type: api.get
-    input_data:
-      endpoint: /customers/{{ customer_id }}
-```
-
-### 6. State Management
-
-```yaml
-# Use state machines for complex flows
-state_machine:
-  name: order-lifecycle
-  initial_state: created
-  states:
-    - name: created
-    - name: validated
-    - name: paid
-    - name: shipped
-    - name: delivered
-      is_terminal: true
+main:
+  task_name: fetch-report
+  activity:
+    type: http.request
+    input:
+      method: GET
+      url: https://httpbin.org/get
+      raise_for_status: true
+    options:
+      retry_policy:                   # max_attempts and timeout_sec override the default;
+        max_attempts: 5               # initial_interval_sec (1) is inherited
+        timeout_sec: 10
+        backoff_coefficient: 2.0
+        non_retryable_error_types: [ValueError]
 ```
 
 ---
 
-## Schema Validation
+## Reserved names
 
-Workflowspecs can be validated against the JSON schema located at:
-`.github/workflowspec_schema.json`
+These names are bound by the engine. They cannot be written as variables or used as a loop's
+`foreach` or `index` name:
 
-Use the schema for:
-- IDE auto-completion
-- Pre-submission validation
-- CI/CD pipeline checks
-- Documentation generation
+- `_`
+- `__context__`, `__sys_info__`, `__user_info__`, and every name that starts and ends with `__`
+- `event`
 
----
-
-## Additional Resources
-
-- **[Statements Reference](./statements.md)** — every statement, with its full field list
-- **[Activity Catalog](./activity-catalog.md)** — every activity type and its input/output contract
-- **[Expressions](../concepts/expressions.md)** — the `{{ }}` language and variable modifiers
-- **[Writing Workflows](../guides/writing-workflows.md)** — authoring patterns
-- **Examples:** the `moco-examples` projects — each is a runnable package with tests
-- **Schema:** `moco schema show` prints the active validation schema and where it came from
+Caller input keys that are reserved are dropped silently.
 
 ---
 
-## Appendix: Quick Reference
+## Validating a wfspec
 
-### Statement Types Summary
+`moco validate` checks a wfspec against the wfspec schema and the activity catalog (activity
+types and their input fields) before anything runs:
 
-| Statement | Category | Purpose |
-|-----------|----------|---------|
-| `transform` | Primitive | Data transformation |
-| `abort` | Primitive | Workflow termination |
-| `activity` | Primitive | External function execution |
-| `workflow` | Primitive | Child workflow execution |
-| `wait_for` | Primitive | Event waiting |
-| `emit_event` | Primitive | Event emission |
-| `sequence` | Composite | Sequential execution |
-| `parallel` | Composite | Parallel execution |
-| `iteration` | Composite | Looping |
-| `state_machine` | Composite | Event-driven FSM |
+```bash
+moco validate my-workflow.yaml
+```
 
-### Expression Types
+Besides the document's shape, it checks rules a schema cannot express:
 
-| Type | Syntax | Purpose |
-|------|--------|---------|
-| Python | `{{ expr }}` | Python evaluation |
-| Glom | `var#python_glom` | Path-based extraction |
-| Literal | `var#literal` | No evaluation |
-| Jinja2 | `var#jinja` | Template rendering |
+- `task_name` values are unique in the document;
+- a write target is well formed and does not use a reserved name or an unknown modifier;
+- `raise: exit` is inside a `tasks` container, and `break` / `continue` inside a `loop`;
+- `error_type` is used only with `type: error`;
+- `branches` starts with `if`, and a single `else` comes last;
+- a nested loop does not reuse an enclosing loop's `foreach` or `index` name;
+- a `workflow` task has exactly one source, and `function` is not combined with a `mode` other
+  than `inline`;
+- state machine state names exist, automatic transitions have a `to_state`, and
+  `checkpoint_policy` is used only when the state machine is `main`;
+- rule `id`s are unique, and a `wait_for` without `event` has a `timeout_sec`.
 
-### Variable Modifiers
+---
 
-| Modifier | Purpose |
-|----------|---------|
-| `@` | Container scope (temporary) |
-| `#python` | Force Python evaluation |
-| `#literal` | Force literal |
-| `#python_glom` | Force glom |
-| `#jinja` | Force Jinja2 |
-| `#` (trailing) | Debug logging |
+## Complete example
 
-### Child Workflow Modes
+An order pipeline that validates its input, looks up prices in parallel, applies a discount by
+customer tier, and handles a payment failure.
 
-| Mode | Wait Behavior | Context Sharing |
-|------|---------------|-----------------|
-| `inline` | Wait for completion | Shared |
-| `sync` | Wait for completion | Isolated |
-| `async` | Wait for start | Isolated |
-| `detached` | Don't wait | Isolated |
+```yaml
+header:
+  schema_version: 2.0.0
+  workflow_name: order-pipeline
+  tags: [orders, example]
+  metadata:
+    default_activity_retry_policy:
+      max_attempts: 3
+      timeout_sec: 30
+
+context:
+  payment: pending
+  payment_error: null
+
+input:
+  order_id:
+  tier: standard
+  skus: [SKU-A, SKU-B]
+  fail_payment: false
+
+output:
+  order_id: '{{ order_id }}'
+  lines: '{{ lines }}'
+  total: '{{ total }}'
+  payment: '{{ payment }}'
+  payment_error: '{{ payment_error }}'
+
+functions:
+  # A stand-in price service: a key in, a value out.
+  lookup_price:
+    input:
+      sku:
+    output:
+      sku: '{{ sku }}'
+      price: '{{ {"SKU-A": 10.0, "SKU-B": 25.5}.get(sku, 0.0) }}'
+    main:
+      activity:
+        type: builtin.delay
+        input: {duration: 1s}
+
+main:
+  tasks:
+    - task_name: validate-input
+      raise:
+        if: '{{ not order_id }}'
+        type: error
+        error_type: ValidationError
+        message: order_id is required
+
+    - task_name: price-lines
+      loop:
+        in: '{{ skus }}'
+        foreach: sku
+        execute_mode: parallel
+        do:
+          task_name: price-one
+          workflow:
+            function: lookup_price
+            input:
+              sku: '{{ sku }}'
+      output:
+        as: lines
+
+    - task_name: discount
+      switch:
+        value: '{{ tier }}'
+        cases:
+          - match: gold
+            do:
+              set:
+                - discount@: 0.15
+          - match: [silver, partner]
+            do:
+              set:
+                - discount@: 0.05
+        default:
+          set:
+            - discount@: 0.0
+
+    - task_name: total
+      set:
+        - _subtotal: '{{ sum(l["price"] for l in lines) }}'
+        - total#: '{{ round(_subtotal * (1 - discount), 2) }}'
+
+    - task_name: charge
+      tasks:
+        - task_name: charge-card
+          raise:
+            if: '{{ fail_payment }}'
+            type: error
+            error_type: PaymentDeclined
+            message: card declined
+        - set:
+            - payment: charged
+      on_error:
+        catch: true
+        do:
+          set:
+            - payment: declined
+            - payment_error: '{{ _["error_message"] }}'
+```
+
+More complete workflows are in the `moco-examples` repository, and each [Tasks](./statements.md)
+entry has a short example of its own.
+
+---
+
+## Quick reference
+
+```text
+document  := header, context?, input?, output?, functions?, main
+header    := schema_version, workflow_name, tags?, metadata?
+function  := input?, output?, main
+
+task      := shared keys + exactly one kind
+shared    := task_name?, skip_if?, props?, output?, on_error?
+output    := set?: [ {target: value}, ... ], data?: value, as?: target
+on_error  := catch?: bool, do?: task
+
+kind      := activity | workflow | set | raise | emit_event | wait_for | checkpoint
+           | state_machine | rules_engine | tasks | loop | switch | branches
+
+tasks     := tasks: [task, ...]                     (props.execute_mode / join_type)
+loop      := loop: {in, foreach?, index?, execute_mode?, join_type?, do: task}
+switch    := switch: {value, cases: [{match, do: task}, ...], default?: task}
+branches  := branches: [{if, do}, {elif, do}..., {else:, do}?]
+
+condition := '{{ expr }}' | {and: [condition...]} | {or: [condition...]} | {not: condition}
+target    := [_]name[@][#python|#literal|#jinja|#python_glom...][#]
+```
+
+| Name | Meaning |
+|---|---|
+| `_` | Raw output of the current task, in its `output`; the error, in `on_error.do` |
+| `__context__` | Merged view of every visible variable |
+| `x` / `x@` / `_x` | Context / container scope / task-local |
+| `x#` | Log the stored value |

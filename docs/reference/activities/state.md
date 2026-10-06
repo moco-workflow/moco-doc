@@ -87,10 +87,10 @@ None.
 **Example**
 
 ```yaml
-- activity:
-    name: save-task
+- task_name: save-task
+  activity:
     type: builtin.state.set_state
-    input_data:
+    input:
       in_global_ns: true
       namespace: "tasks"
       key: "{{ task_id }}"
@@ -122,19 +122,22 @@ The stored value, or `null` when the key does not exist. Reading a missing key i
 **Example**
 
 ```yaml
-- activity:
-    name: load-task
+- task_name: load-task
+  activity:
     type: builtin.state.get_state
-    input_data:
+    input:
       in_global_ns: true
       namespace: "tasks"
       key: "{{ task_id }}"
-    output_name: task
+  output:
+    as: task
 
-- abort:
-    condition: "{{ task is None }}"
-    type: raise
-    message: "No such task: {{ task_id }}"
+- task_name: require-task
+  raise:
+    if: '{{ task is None }}'
+    type: error
+    error_type: TaskNotFound
+    message: 'No such task: {{ task_id }}'
 ```
 
 ---
@@ -158,20 +161,21 @@ Same as [`get_state`](#builtinstateget_state): `namespace`, `key`, `in_global_ns
 **Example**
 
 ```yaml
-- activity:
-    name: read-cache
+- task_name: read-cache
+  activity:
     type: builtin.state.get_state_with_ts
-    input_data:
+    input:
       namespace: "fx-rates"
       key: "{{ pair }}"
-    output_name: cached
+  output:
+    as: cached
 
-- transform:
-    output_data:
-      - is_stale: >-
-          {{ cached['value'] is None
-             or (datetime.now(timezone.utc)
-                 - datetime.fromisoformat(cached['last_update_time'])).total_seconds() > 3600 }}
+- task_name: check-freshness
+  set:
+    - is_stale: >-
+        {{ cached['value'] is None
+           or (datetime.now(timezone.utc)
+               - datetime.fromisoformat(cached['last_update_time'])).total_seconds() > 3600 }}
 ```
 
 ---
@@ -191,10 +195,10 @@ None.
 **Example**
 
 ```yaml
-- activity:
-    name: forget-task
+- task_name: forget-task
+  activity:
     type: builtin.state.del_state
-    input_data:
+    input:
       in_global_ns: true
       namespace: "tasks"
       key: "{{ task_id }}"
@@ -229,17 +233,18 @@ A list of `{key, topic}` objects.
 The ten most recently touched pending tasks:
 
 ```yaml
-- activity:
-    name: list-pending
+- task_name: list-pending
+  activity:
     type: builtin.state.list_states
-    input_data:
+    input:
       in_global_ns: true
       namespace: "tasks"
       topic_pattern: "pending"
       order_by: last_update_time
       order_direction: desc
       limit: 10
-    output_name: pending      # -> [{key, topic}, ...]
+  output:
+    as: pending      # -> [{key, topic}, ...]
 ```
 
 ---
@@ -263,13 +268,14 @@ A list of namespace names. Secret namespaces are never included.
 **Example**
 
 ```yaml
-- activity:
-    name: list-namespaces
+- task_name: list-namespaces
+  activity:
     type: builtin.state.list_namespaces
-    input_data:
+    input:
       name_pattern: "task*"
       in_global_ns: true
-    output_name: namespaces   # -> ["tasks", "task-archive", ...]
+  output:
+    as: namespaces   # -> ["tasks", "task-archive", ...]
 ```
 
 ---
@@ -294,14 +300,14 @@ None.
 
 **Example**
 
-Moving a task through its lifecycle, from `moco-examples/task-manager/src/get-task.yaml`:
+Moving a task through its lifecycle:
 
 ```yaml
-- activity:
-    name: update-task-topic
-    condition: "{{ has_task }}"
+- task_name: update-task-topic
+  skip_if: '{{ not has_task }}'
+  activity:
     type: builtin.state.update_topic
-    input_data:
+    input:
       in_global_ns: true
       namespace: "tasks"
       key: "{{ task_id }}"
@@ -334,14 +340,15 @@ An integer: the number of rows deleted.
 **Example**
 
 ```yaml
-- activity:
-    name: purge-completed
+- task_name: purge-completed
+  activity:
     type: builtin.state.delete_by_topic
-    input_data:
+    input:
       in_global_ns: true
       namespace: "tasks"
       topic_pattern: "completed-*"
-    output_name: purged_count   # -> e.g. 42
+  output:
+    as: purged_count   # -> e.g. 42
 ```
 
 :::caution This deletes many rows at once
@@ -371,12 +378,13 @@ failing.
 **Example**
 
 ```yaml
-- activity:
-    name: drop-scratch-space
+- task_name: drop-scratch-space
+  activity:
     type: builtin.state.delete_namespace
-    input_data:
+    input:
       namespace: "scratch"
-    output_name: deleted_count   # -> e.g. 17
+  output:
+    as: deleted_count   # -> e.g. 17
 ```
 
 :::caution This deletes the entire namespace

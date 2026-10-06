@@ -15,7 +15,7 @@ built-in ones**.
 ## Setup
 
 Every activity takes a `connection` object. Build it once in `context:` and reuse it, rather than
-repeating it per step.
+repeating it in every task.
 
 | Field | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
@@ -33,17 +33,11 @@ certificate and key. An unauthenticated connection is not expressible.
 
 ```yaml
 context:
-  k8s: {}
-
-# ...
-- transform:
-    name: prepare
-    output_data:
-      - k8s:
-          api_server: "https://my-cluster.example.com:6443"
-          token_secret_key: "K8S_PROD_TOKEN"
-          ca_cert_secret_key: "K8S_PROD_CA"
-          namespace: "payments"
+  k8s:
+    api_server: "https://my-cluster.example.com:6443"
+    token_secret_key: "K8S_PROD_TOKEN"
+    ca_cert_secret_key: "K8S_PROD_CA"
+    namespace: "payments"
 ```
 
 Store the credentials once with [`builtin.secret.upload`](./secret.md).
@@ -153,10 +147,10 @@ listing what had already been applied — because a half-mutated cluster is some
 needs to know about precisely.
 
 ```yaml
-- activity:
+- task_name: create-job
+  activity:
     type: k8s.apply
-    name: create-job
-    input_data:
+    input:
       connection: "{{ k8s }}"
       field_manager: "moco-migrate"
       manifest:
@@ -173,13 +167,14 @@ needs to know about precisely.
                 - name: migrate
                   image: "busybox:1.36"
                   command: ["/bin/sh", "-c", "echo migrating; sleep 5"]
-    output_name: created
+  output:
+    as: created
 ```
 
 :::caution `k8s.apply` runs once — it is not retried
 Its default policy is `max_attempts: 1`. Server-side apply is itself idempotent, but a multi-
 document bundle that fails at document 5 would re-apply documents 1–4 on a retry. If your bundle
-is a single document, or purely declarative, raise `max_attempts` per call.
+is a single document, or purely declarative, raise `max_attempts` per call in `options.retry_policy`.
 :::
 
 ---
@@ -241,7 +236,8 @@ Lists resources of a kind.
 
 :::note Every item lands in workflow history
 A pod list in a busy namespace is megabytes, copied into history and replayed on every workflow
-task. Narrow with selectors and keep `limit` small; project what you need with `output_data`.
+task. Narrow with selectors and keep `limit` small, and project what you need with `output.data` (`_` is
+the raw result) rather than storing the whole list.
 :::
 
 ---
@@ -277,7 +273,7 @@ Deletes a resource by name, or a set of them by label selector.
 | `not_found` | bool | True when the target was already absent |
 
 `not_found_ok` defaults to **true** here (unlike `k8s.get`) — deleting something already gone is
-what makes a cleanup step safe to re-run. Default policy is `max_attempts: 1`.
+what makes a cleanup task safe to re-run. Default policy is `max_attempts: 1`.
 
 ---
 
@@ -344,14 +340,15 @@ Reads a bounded tail of a pod's log.
 `label_selector` is how you reach a Job's pod, whose name the cluster generates:
 
 ```yaml
-- activity:
+- task_name: collect-logs
+  activity:
     type: k8s.logs
-    name: collect-logs
-    input_data:
+    input:
       connection: "{{ k8s }}"
       label_selector: "job-name={{ job_name }}"
       tail_lines: 200
-    output_name: job_logs
+  output:
+    as: job_logs
 ```
 
 :::note There is no follow/streaming mode
@@ -406,10 +403,10 @@ Exactly one of three condition forms is required:
 `fail_on_conditions` is what stops a failed Job from consuming the whole budget:
 
 ```yaml
-- activity:
+- task_name: await-job
+  activity:
     type: k8s.wait
-    name: await-job
-    input_data:
+    input:
       connection: "{{ k8s }}"
       api_version: batch/v1
       kind: Job
@@ -417,15 +414,17 @@ Exactly one of three condition forms is required:
       condition: Complete
       fail_on_conditions: ["Failed"]
       raise_on_timeout: false
-    retry_policy:
-      timeout_sec: 900
-    output_name: awaited
+    options:
+      retry_policy:
+        timeout_sec: 900
+  output:
+    as: awaited
 ```
 
 :::note This activity blocks, and heartbeats while it does
 Its default budget is 600s with Temporal heartbeats configured, so a worker crash mid-wait is
 rescheduled rather than silently lost. If the workflow has other work to do meanwhile, put it in
-a `parallel` branch or set `async_mode: true` on the call.
+a parallel `tasks` container or set `options.async_mode: true` on the call.
 
 A condition that is never met raises a **non-retryable** error, so a genuine failure is not
 multiplied by `max_attempts`.
@@ -460,14 +459,15 @@ Runs a command inside a pod's container and captures its output and exit status.
 | `truncated` | bool | Whether either stream was cut |
 
 ```yaml
-- activity:
+- task_name: check-migration-state
+  activity:
     type: k8s.exec
-    name: check-migration-state
-    input_data:
+    input:
       connection: "{{ k8s }}"
       pod_name: "{{ pod }}"
       command: ["/bin/sh", "-c", "psql -tAc 'select count(*) from schema_migrations'"]
-    output_name: migration_check
+  output:
+    as: migration_check
 ```
 
 :::danger `k8s.exec` is arbitrary remote code execution
@@ -489,17 +489,81 @@ phases have four different retry postures and one activity manifest carries only
 policy. Fused together, an API server blip while fetching logs would fail the activity even
 though the Job had already succeeded — and the workflow could not tell the difference.
 
-Composed in a wfspec, each step retries on its own terms, you can see which phase failed, and
-"clean up on success but keep the evidence on failure" is a single `condition:`. The full
-worked example is `moco-examples/k8s-demo/src/k8s-job-run.yaml`:
+Composed in a wfspec, each task retries on its own terms, you can see which phase failed, and
+"clean up on success but keep the evidence on failure" is a single `skip_if`:
 
 ```yaml
-- activity: {type: k8s.apply, name: create-job,   ...}
-- activity: {type: k8s.wait,  name: await-job,    ...}
-- activity: {type: k8s.logs,  name: collect-logs, ...}
-- activity:
-    type: k8s.delete
-    name: cleanup-job
-    condition: "{{ cleanup and awaited['met'] }}"
-    input_data: {...}
+header:
+  schema_version: 2.0.0
+  workflow_name: k8s-job-run
+
+input:
+  k8s: {}                # a connection object, as in Setup
+  job_name: db-migrate
+  image: "busybox:1.36"
+  cleanup: true
+
+output:
+  succeeded: "{{ awaited['met'] }}"
+  logs: "{{ job_logs }}"
+
+main:
+  tasks:
+    - task_name: create-job
+      activity:
+        type: k8s.apply
+        input:
+          connection: "{{ k8s }}"
+          manifest:
+            apiVersion: batch/v1
+            kind: Job
+            metadata:
+              name: "{{ job_name }}"
+            spec:
+              backoffLimit: 0
+              template:
+                spec:
+                  restartPolicy: Never
+                  containers:
+                    - name: main
+                      image: "{{ image }}"
+                      command: ["/bin/sh", "-c", "echo migrating; sleep 5"]
+
+    - task_name: await-job
+      activity:
+        type: k8s.wait
+        input:
+          connection: "{{ k8s }}"
+          api_version: batch/v1
+          kind: Job
+          name: "{{ job_name }}"
+          condition: Complete
+          fail_on_conditions: ["Failed"]
+          raise_on_timeout: false
+        options:
+          retry_policy:
+            timeout_sec: 900
+      output:
+        as: awaited
+
+    - task_name: collect-logs
+      activity:
+        type: k8s.logs
+        input:
+          connection: "{{ k8s }}"
+          label_selector: "job-name={{ job_name }}"
+          tail_lines: 200
+      output:
+        data: "{{ [p['log'] for p in _['pods']] }}"
+        as: job_logs
+
+    - task_name: cleanup-job
+      skip_if: "{{ not (cleanup and awaited['met']) }}"
+      activity:
+        type: k8s.delete
+        input:
+          connection: "{{ k8s }}"
+          api_version: batch/v1
+          kind: Job
+          name: "{{ job_name }}"
 ```

@@ -175,16 +175,13 @@ The [shared indexing output](#shared-indexing-output).
 
 **Example**
 
-From `moco-examples/rag-demo/src/rag-demo.yaml`:
+Indexing a list of URLs:
 
 ```yaml
-- activity:
+- task_name: index-documents
+  activity:
     type: llama_index.index_web
-    name: index-documents
-    retry_policy:
-      timeout_sec: 600
-      max_attempts: 1
-    input_data:
+    input:
       urls: "{{ document_urls }}"
       loader: download
       vectordb_info: "{{ vectordb_info }}"
@@ -194,7 +191,12 @@ From `moco-examples/rag-demo/src/rag-demo.yaml`:
       overwrite: true
       metadata:
         collection: "rag-demo"
-    output_name: index_result
+    options:
+      retry_policy:
+        timeout_sec: 600
+        max_attempts: 1
+  output:
+    as: index_result
 ```
 
 ---
@@ -226,9 +228,10 @@ skipped, so `failed_sources` is always empty.
 **Example**
 
 ```yaml
-- activity:
+- task_name: index-site
+  activity:
     type: llama_index.index_site
-    input_data:
+    input:
       url: "https://docs.example.com/sitemap.xml"
       crawler: sitemap
       limit: 200                      # bound the crawl
@@ -281,16 +284,13 @@ The [shared indexing output](#shared-indexing-output).
 
 **Example**
 
-From `moco-examples/rag-demo/src/rag-github-demo.yaml`:
+Indexing a repository:
 
 ```yaml
-- activity:
+- task_name: index-repository
+  activity:
     type: llama_index.index_github
-    name: index-repository
-    retry_policy:
-      timeout_sec: 1800
-      max_attempts: 1
-    input_data:
+    input:
       auth:
         token_secret_key: "GH_TOKEN"
         base_url: "https://api.github.com"    # or https://<ghe-host>/api/v3
@@ -304,7 +304,12 @@ From `moco-examples/rag-demo/src/rag-github-demo.yaml`:
       overwrite: true
       metadata:
         collection: "rag-github-demo"
-    output_name: index_result
+    options:
+      retry_policy:
+        timeout_sec: 1800
+        max_attempts: 1
+  output:
+    as: index_result
 ```
 
 ---
@@ -334,9 +339,10 @@ The [shared indexing output](#shared-indexing-output).
 **Example**
 
 ```yaml
-- activity:
+- task_name: index-drive-folder
+  activity:
     type: llama_index.index_gdrive
-    input_data:
+    input:
       auth: "{{ gdrive_auth }}"       # credentials_secret_key -> service-account key JSON
       folder_id: "{{ folder_id }}"    # or file_ids: [...], or query_string: "name contains 'Q1'"
       vectordb_info: "{{ vectordb_info }}"
@@ -376,9 +382,10 @@ The [shared indexing output](#shared-indexing-output).
 **Example**
 
 ```yaml
-- activity:
+- task_name: index-local-files
+  activity:
     type: llama_index.index_files
-    input_data:
+    input:
       path: "reports/q1"              # relative to MOCO_RAG_FILE_DIR
       required_extensions: [".pdf", ".md"]
       vectordb_info: "{{ vectordb_info }}"
@@ -428,14 +435,16 @@ behaviour exactly. To migrate: rename the activity, rename `document_urls` to `u
 **Example**
 
 ```yaml
-- activity:
+- task_name: index-docs
+  activity:
     type: llama_index.index_docs      # prefer llama_index.index_web
-    input_data:
+    input:
       document_urls: "{{ document_urls }}"
       vectordb_info: "{{ vectordb_info }}"
       embed_model_info: "{{ embed_model_info }}"
       overwrite: true
-    output_name: index_result         # -> indexed_urls, failed_urls, ...
+  output:
+    as: index_result         # -> indexed_urls, failed_urls, ...
 ```
 
 ---
@@ -470,16 +479,13 @@ Runs a semantic search against an index. Two modes:
 
 **Examples**
 
-Retrieve mode, from `moco-examples/rag-demo/src/rag-demo.yaml`:
+Retrieve mode:
 
 ```yaml
-- activity:
+- task_name: retrieve-chunks
+  activity:
     type: llama_index.query
-    name: retrieve-chunks
-    retry_policy:
-      timeout_sec: 120
-      max_attempts: 2
-    input_data:
+    input:
       query: "{{ question }}"
       vectordb_info: "{{ vectordb_info }}"
       embed_model_info: "{{ embed_model_info }}"
@@ -487,17 +493,22 @@ Retrieve mode, from `moco-examples/rag-demo/src/rag-demo.yaml`:
       response_mode: retrieve
       filters:
         collection: "rag-demo"
-    output_name: retrieve_result   # -> nodes[{node_id, text, score, metadata}], node_count
+    options:
+      retry_policy:
+        timeout_sec: 120
+        max_attempts: 2
+  output:
+    as: retrieve_result   # -> nodes[{node_id, text, score, metadata}], node_count
 ```
 
 Synthesize mode, which needs an `llm_model_info` block (its `apikey_secret_key` defaults to the
 embedding one, since the two usually share a gateway):
 
 ```yaml
-- activity:
+- task_name: answer-question
+  activity:
     type: llama_index.query
-    name: answer-question
-    input_data:
+    input:
       query: "{{ question }}"
       vectordb_info: "{{ vectordb_info }}"
       embed_model_info: "{{ embed_model_info }}"
@@ -505,11 +516,12 @@ embedding one, since the two usually share a gateway):
         model_name: "{{ chat_model }}"
       top_k: 5
       response_mode: synthesize
-    output_name: rag_answer          # -> answer, nodes, node_count
+  output:
+    as: rag_answer          # -> answer, nodes, node_count
 ```
 
 A complete runnable example, contrasting both query modes over the same question, lives in
-`moco-examples/rag-demo/`.
+`moco-examples-v2/activities/llama-index.yaml`.
 
 ---
 

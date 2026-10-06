@@ -113,7 +113,7 @@ const config: Config = {
       items: [
         ...siteNavbarItems,
         {
-          href: 'https://github.com/moco-workflow/moco',
+          href: 'https://github.com/moco-workflow/moco-doc',
           label: 'GitHub',
           position: 'right',
         },
@@ -148,7 +148,7 @@ const config: Config = {
           items: [
             {
               label: 'GitHub',
-              href: 'https://github.com/moco-workflow/moco',
+              href: 'https://github.com/moco-workflow',
             },
           ],
         },

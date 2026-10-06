@@ -55,19 +55,21 @@ With `no_wait: false`: a list with one entry per message —
 **Example**
 
 ```yaml
-- activity:
-    name: publish-orders
+- task_name: publish-orders
+  activity:
     type: kafka.publish
-    input_data:
+    input:
       topic: "orders.enriched"
       broker: "{{ kafka_broker }}"
       no_wait: false          # wait for acknowledgement so failures surface here
       messages: "{{ [ [o['order_id'], o] for o in enriched_orders ] }}"
-    output_name: publish_result   # -> [{result, message}, ...]
+  output:
+    as: publish_result        # -> [{result, message}, ...]
 
-- abort:
-    condition: "{{ any(r['result'] == 'fail' for r in publish_result) }}"
-    type: raise
+- task_name: check-delivery
+  raise:
+    if: "{{ any(r['result'] == 'fail' for r in publish_result) }}"
+    type: error
     message: "Kafka delivery failed: {{ publish_result }}"
 ```
 
@@ -121,41 +123,50 @@ Each message arrives at `wait_for` as an event whose `data` is:
 Start the consumer in the background, then handle messages as they arrive:
 
 ```yaml
-- activity:
-    name: start-consumer
+- task_name: start-consumer
+  activity:
     type: kafka.consume
-    async_mode: true              # required: otherwise this blocks for a day
-    input_data:
+    input:
       topic: "orders.raw"
       consumer_group: "moco-enricher"
       broker: "{{ kafka_broker }}"
       relay_topic: "kafka.msg"
       relay_event_type: "kafka_message"
       target_workflow_id: "{{ __sys_info__['workflow_id'] }}"
+    options:
+      async_mode: true          # required: otherwise this blocks for a day
 
-- iteration:
-    input_data: "{{ range(max_messages) }}"
-    body:
-      sequence:
-        elements:
-          - wait_for:
-              event_source_topic: "kafka.msg"
+- task_name: store-messages
+  loop:
+    in: "{{ range(max_messages) }}"
+    do:
+      tasks:
+        - task_name: next-message
+          wait_for:
+            event:
+              topic: "kafka.msg"
               event_type: "kafka_message"
-              timeout_sec: 300
-              output_name: msg
-          - activity:
-              type: sql.execute
-              input_data:
-                connection_string_secret_key: "ORDERS_DB_CONN"
-                statement: "INSERT INTO order_raw (order_id, payload) VALUES (:id, :payload)"
-                parameters:
-                  id: "{{ msg['data']['key'] }}"
-                  payload: "{{ msg['data']['value'] }}"
+            timeout_sec: 300
+          output:
+            as: msg@
+        - task_name: stop-when-idle
+          raise:
+            if: "{{ msg is None }}"   # wait_for timed out
+            type: break
+        - task_name: insert-row
+          activity:
+            type: sql.execute
+            input:
+              connection_string_secret_key: "ORDERS_DB_CONN"
+              statement: "INSERT INTO order_raw (order_id, payload) VALUES (:id, :payload)"
+              parameters:
+                id: "{{ msg['data']['key'] }}"
+                payload: "{{ msg['data']['value'] }}"
 ```
 
 :::caution Start it asynchronously
-`kafka.consume` blocks for its whole timeout — a full day. Set `async_mode: true`, or run it in a
-parallel branch alongside the statements that consume its events. Unlike
+`kafka.consume` blocks for its whole timeout — a full day. Set `options.async_mode: true`, or run
+it in a parallel `tasks` container alongside the tasks that consume its events. Unlike
 [`rabbit.receive`](./rabbit.md#rabbitreceive), it does **not** default to async mode.
 :::
 

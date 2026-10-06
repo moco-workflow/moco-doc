@@ -64,11 +64,10 @@ subscription's root field.
 Adapted from the provider's integration test:
 
 ```yaml
-- activity:
+- task_name: start-subscription
+  activity:
     type: graphql.subscribe
-    name: start_subscription
-    async_mode: true
-    input_data:
+    input:
       endpoint: "wss://api.example.com/graphql"
       subscription: |
         subscription OnPriceTick($symbol: String!) {
@@ -81,25 +80,27 @@ Adapted from the provider's integration test:
       relay_topic: graphql.msg
       relay_event_type: graphql_payload
       target_workflow_id: "{{ __sys_info__['workflow_id'] }}"
-    retry_policy:
-      heartbeat_interval_sec: 0.5
-      heartbeat_timeout_sec: 5
+    options:
+      async_mode: true
+      retry_policy:
+        heartbeat_interval_sec: 0.5
+        heartbeat_timeout_sec: 5
 ```
 
 ```yaml
-- wait_for:
-    event_source_topic: graphql.msg
-    event_type: graphql_payload
+- task_name: next-tick
+  wait_for:
+    event:
+      topic: graphql.msg
+      event_type: graphql_payload
     timeout_sec: 300
-    output_name: tick
-
-- transform:
-    output_data:
-      - price: "{{ tick['data']['priceTick']['price'] }}"
+  output:
+    set:
+      - price: "{{ _['data']['priceTick']['price'] }}"
 ```
 
 :::caution Start it asynchronously
-Without `async_mode: true` (or a parallel branch) this activity blocks the workflow for a full day.
+Without `options.async_mode: true` (or a parallel `tasks` container) this activity blocks the workflow for a full day.
 Unlike [`rabbit.receive`](./rabbit.md#rabbitreceive), it does not default to async mode.
 :::
 

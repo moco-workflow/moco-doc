@@ -130,8 +130,28 @@ moco session select <namespace-id>   # switch working namespace
 moco validate src/my-workflow.yaml
 ```
 
-`validate` checks the YAML against the workflowspec JSON schema. It runs entirely locally and needs
-neither a login nor a running service — so it is the right thing to put in a pre-commit hook.
+`validate` runs entirely locally and needs neither a login nor a running service — so it is the
+right thing to put in a pre-commit hook. It checks a wfspec in two passes:
+
+1. **Schema.** The document's structure against the workflowspec JSON schema: the top-level keys,
+   the shape of every task kind, variable names and their modifiers, and the input fields of every
+   activity type.
+2. **Static rules** the schema cannot express, among them:
+   - every `task_name` is unique in the document, including inside `functions`;
+   - a task has exactly one kind key (reported once, naming the keys it found);
+   - `branches` starts with `if`, uses `elif` after that, and ends with at most one `else`;
+   - `raise` with `type: exit` sits inside a `tasks` container, and `break` / `continue` inside a
+     `loop`; `error_type` is used only with `type: error`;
+   - a `workflow` task has exactly one of `ref`, `function`, `contents`, `contents_yaml`, and a
+     `function` call is `inline`;
+   - no variable write targets a reserved name such as `_` or `__context__`, and no name is both
+     task-local and container-scoped (`_name@`);
+   - nested loops do not reuse a `foreach` or `index` name;
+   - state machine transitions name declared states.
+
+Problems that do not make the spec invalid — `props.execute_mode` on a task that is not a `tasks`
+container, say — are printed as warnings. A valid spec prints its `workflow_name`; its version is
+the package's, set in `moco.json`.
 
 The schema ships with the CLI, but the service's schema advances as activities are added. Keep them
 in sync:
@@ -159,8 +179,9 @@ moco run src/hello-moco.yaml                 # local file
 moco run hello-moco                          # deployed, resolved by name
 ```
 
-Running a local file bundles the spec together with any child workflows it references and sends the
-whole bundle; nothing needs to be published first. This is the normal development loop.
+Running a local file bundles the spec together with the child workflows it references by `ref`
+(found as `<workflow_name>.yaml` next to it) and sends the whole bundle; nothing needs to be
+published first. Children given inline with `contents` travel inside the spec already. This is the normal development loop.
 
 | Option | Effect |
 |--------|--------|
@@ -188,9 +209,9 @@ Debug mode is enabled **automatically when you run a local file**, so variables 
 modifier stream to your terminal as they are evaluated:
 
 ```yaml
-- transform:
-    output_data:
-      - stars#: '{{ repo_info.get("stargazers_count", 0) }}'
+- task_name: build-summary
+  set:
+    - stars#: '{{ repo_info.get("stargazers_count", 0) }}'
 ```
 
 When running a *deployed* workflow by name, pass `--debug` to get the same traces. Traces from
@@ -277,8 +298,9 @@ A published unit is a **package**: one or more wfspec files versioned together. 
 }
 ```
 
-The package needs an **entry point**: one source file whose `wfspec_name` equals
-`wfspec_package_name`. The remaining sources are child workflows it may reference.
+The package needs an **entry point**: one source file whose `header.workflow_name` equals
+`wfspec_package_name`. The remaining sources are child workflows it may reference by `ref`. Every
+workflow in the package takes the package's version, `wfspec_package_version`.
 
 ```bash
 moco publish --dry-run                     # validate and show what would be published

@@ -5,7 +5,7 @@ sidebar_label: Secrets
 # Secret Activities
 
 Four activities manage the secret store — the place API keys, connection strings and service
-credentials live so they never appear in a workflowspec.
+credentials live so they never appear in a wfspec.
 
 ## How secrets reach an activity
 
@@ -103,18 +103,20 @@ and RSA-encrypts only the key.
 
 **Example**
 
-From `moco-core/src/moco/core/workflow/sys_workflow/sys.secret.yaml`, the system workflow behind
-the CLI's secret commands:
+The pattern used by the system workflow behind the CLI's secret commands, which picks the
+operation from its `operator` input:
 
 ```yaml
-- activity:
-    condition: '{{operator=="upload"}}'
+- task_name: upload-secret
+  skip_if: '{{ operator != "upload" }}'
+  activity:
     type: builtin.secret.upload
-    input_data:
-      secret_name: '{{secret_name}}'
-      encrypted_secret: '{{encrypted_secret}}'
-      in_global_ns: '{{in_global_ns}}'
-    output_name: result
+    input:
+      secret_name: '{{ secret_name }}'
+      encrypted_secret: '{{ encrypted_secret }}'
+      in_global_ns: '{{ in_global_ns }}'
+  output:
+    as: result
 ```
 
 ---
@@ -139,22 +141,25 @@ An [EncryptedData](#encrypteddata) object, or `null` when no such secret exists.
 **Example**
 
 ```yaml
-- activity:
+- task_name: get-db-password
+  activity:
     type: builtin.secret.get
-    input_data:
+    input:
       secret_name: database_password
       in_global_ns: false      # optional; true reads the shared global store
       expiration_seconds: 60   # optional; defaults to 60
-    output_name: db_password
+  output:
+    as: db_password
 ```
 
 ```yaml
-- activity:
+- task_name: call-partner-api
+  activity:
     type: http.request
-    input_data:
+    input:
       method: GET
       url: https://api.partner.example.com/v1/accounts
-      encrypted_auth_token: "{{ db_password }}"
+      encrypted_auth_token: '{{ db_password }}'
 ```
 
 :::caution Fetch late, not early
@@ -189,12 +194,14 @@ A list of secret names.
 **Example**
 
 ```yaml
-- activity:
-    condition: '{{operator=="list"}}'
+- task_name: list-secret
+  skip_if: '{{ operator != "list" }}'
+  activity:
     type: builtin.secret.list
-    input_data:
-      in_global_ns: '{{in_global_ns}}'
-    output_name: result     # -> ["MY_LLM_TOKEN", "REPORTING_DB_CONN", ...]
+    input:
+      in_global_ns: '{{ in_global_ns }}'
+  output:
+    as: result     # -> ["MY_LLM_TOKEN", "REPORTING_DB_CONN", ...]
 ```
 
 ---
@@ -217,13 +224,15 @@ None.
 **Example**
 
 ```yaml
-- activity:
-    condition: '{{operator=="delete"}}'
+- task_name: delete-secret
+  skip_if: '{{ operator != "delete" }}'
+  activity:
     type: builtin.secret.delete
-    input_data:
-      secret_name: '{{secret_name}}'
-      in_global_ns: '{{in_global_ns}}'
-    output_name: result
+    input:
+      secret_name: '{{ secret_name }}'
+      in_global_ns: '{{ in_global_ns }}'
+  output:
+    as: result
 ```
 
 :::caution Deleting breaks running workflows

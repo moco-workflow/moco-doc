@@ -28,10 +28,11 @@ interpolate values into the SQL text with `{{ }}`; that is how SQL injection get
 placeholder form is also faster because the statement can be prepared.
 
 ```yaml
-query: "SELECT id, name FROM account WHERE tier = :tier AND created_at > :since"
-parameters:
-  tier: "{{ tier }}"
-  since: "{{ since_date }}"
+input:
+  query: 'SELECT id, name FROM account WHERE tier = :tier AND created_at > :since'
+  parameters:
+    tier: '{{ tier }}'
+    since: '{{ since_date }}'
 ```
 
 ## Defaults
@@ -67,26 +68,23 @@ returns the rows.
 **Example**
 
 ```yaml
-- activity:
-    name: load-active-accounts
+- task_name: load-active-accounts
+  activity:
     type: sql.query
-    input_data:
-      connection_string_secret_key: "REPORTING_DB_CONN"
+    input:
+      connection_string_secret_key: REPORTING_DB_CONN
       query: |
         SELECT id, name, tier
         FROM account
         WHERE tier = :tier AND created_at > :since
         ORDER BY created_at DESC
       parameters:
-        tier: "{{ tier }}"
-        since: "{{ since_date }}"
-    output_name: accounts     # -> rows, columns, row_count
-```
-
-```yaml
-- transform:
-    output_data:
-      - account_names: "{{ [r['name'] for r in accounts['rows']] }}"
+        tier: '{{ tier }}'
+        since: '{{ since_date }}'
+  output:
+    set:
+      - accounts: '{{ _["rows"] }}'
+      - account_names: '{{ [r["name"] for r in _["rows"]] }}'
 ```
 
 ---
@@ -113,14 +111,14 @@ of affected rows. Pass a **list** of dicts as `parameters` to run the statement 
 
 **Examples**
 
-DDL, from `moco-examples/moco-agent/src/agent-admin.yaml`:
+Conditional DDL — `skip_if` skips the task when there is nothing to drop:
 
 ```yaml
-- activity:
-    name: drop-domain-table
+- task_name: drop-domain-table
+  skip_if: '{{ not (drop_table and existing.get("table_name")) }}'
+  activity:
     type: sql.execute
-    condition: '{{ bool(drop_table) and bool(existing.get("table_name")) }}'
-    input_data:
+    input:
       connection_string_secret_key: '{{ existing.get("pgvector_secret_key") or "MOCO_PGVECTOR_CONN" }}'
       statement: 'DROP TABLE IF EXISTS data_{{ re.sub(r"[^a-z0-9_]", "_", str(existing["table_name"]).strip().lower()) }}'
 ```
@@ -128,14 +126,16 @@ DDL, from `moco-examples/moco-agent/src/agent-admin.yaml`:
 A batch insert:
 
 ```yaml
-- activity:
-    name: record-results
+- task_name: record-results
+  activity:
     type: sql.execute
-    input_data:
-      connection_string_secret_key: "REPORTING_DB_CONN"
-      statement: "INSERT INTO run_result (run_id, symbol, score) VALUES (:run_id, :symbol, :score)"
-      parameters: "{{ [ {'run_id': run_id, 'symbol': r['symbol'], 'score': r['score']} for r in results ] }}"
-    output_name: inserted     # -> row_count
+    input:
+      connection_string_secret_key: REPORTING_DB_CONN
+      statement: 'INSERT INTO run_result (run_id, symbol, score) VALUES (:run_id, :symbol, :score)'
+      parameters: '{{ [{"run_id": run_id, "symbol": r["symbol"], "score": r["score"]} for r in results] }}'
+  output:
+    set:
+      - inserted_count: '{{ _["row_count"] }}'
 ```
 
 :::note Each call opens its own connection

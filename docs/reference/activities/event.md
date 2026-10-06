@@ -7,7 +7,7 @@ sidebar_label: Events & Metrics
 Two activities publish observability signals out of a workflow: a **debug event** streamed live to
 whoever is watching the run, and a **metric event** written to Kafka for aggregation.
 
-Both are infrastructure-facing. The engine already emits them for you — step boundaries, activity
+Both are infrastructure-facing. The engine already emits them for you — task boundaries, activity
 progress, activity start/end/error metrics — so a workflow only calls them directly to add its own
 signals.
 
@@ -52,16 +52,26 @@ None.
 Reporting progress from inside a long loop:
 
 ```yaml
-- activity:
-    name: report-progress
+- task_name: report-progress
+  activity:
     type: builtin.event.emit_debug_event
-    input_data:
+    input:
       event_type: data_log
-      workflow_id: "{{ __sys_info__['workflow_id'] }}"
+      workflow_id: '{{ __sys_info__["workflow_id"] }}'
       event_data:
         message: "Processed {{ done }} of {{ total }} records"
         done: "{{ done }}"
         total: "{{ total }}"
+```
+
+To log a value you are already storing, there is a shorter way: end the variable name with `#`
+in `set`, `output.set` or `output.as`, and the engine emits a `data_log` event carrying the stored
+value:
+
+```yaml
+- task_name: count-processed
+  set:
+    - done#: '{{ done + len(batch) }}'     # stored as `done`, and logged
 ```
 
 :::note Debug mode only, and best effort
@@ -90,8 +100,8 @@ workflow normally supplies only `event_type`, `event_value` and `properties`.
 | `event_type` | str | yes | — | Metric name, e.g. `order.processed` |
 | `event_value` | number | no | `null` | The measurement |
 | `properties` | dict | no | `null` | Extra dimensions to slice by |
-| `wfspec_name` | str | no | auto | Workflowspec name |
-| `wfspec_version` | str | no | auto | Workflowspec version |
+| `wfspec_name` | str | no | auto | Workflow name |
+| `wfspec_version` | str | no | auto | Workflow (package) version |
 | `activity_type` | str | no | auto | Activity type |
 | `user_id` | str | no | auto | Calling user |
 | `trace_id` | str | no | auto | Trace the run belongs to |
@@ -107,10 +117,10 @@ None.
 **Example**
 
 ```yaml
-- activity:
-    name: record-batch-size
+- task_name: record-batch-size
+  activity:
     type: builtin.event.emit_metric_event
-    input_data:
+    input:
       event_type: "orders.batch_processed"
       event_value: "{{ len(orders) }}"
       properties:

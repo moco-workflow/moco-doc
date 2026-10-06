@@ -15,19 +15,37 @@ the input and output contract of each of its activities, and worked examples.
 
 For what an activity *is* and how to write one into a workflow, see
 [Activity System](../concepts/activities.md) and the
-[`activity` statement](./statements.md#activity).
+[`activity` task](./statements.md#activity).
 
 ## How to read this reference
 
-Every activity is invoked the same way, so the statement-level fields — `type`, `input_data`,
-`config_data`, `output_name`, `output_data`, `retry_policy`, `execute_locally`, `async_mode`,
-`enable_cache` — are documented once in [Activity System](../concepts/activities.md) rather than
-repeated on each page. The provider pages cover only what is specific to an activity:
+Every activity is invoked the same way, as an `activity` task:
+
+```yaml
+- task_name: fetch-user
+  activity:
+    type: http.request            # the activity type
+    input:                        # the activity's input fields, documented per page
+      method: GET
+      url: 'https://api.example.com/users/{{ user_id }}'
+      output_json: true
+    options:                      # optional: retry_policy, execute_locally, enable_cache, async_mode ...
+      retry_policy:
+        max_attempts: 5
+  output:
+    data: '{{ _["json"] }}'       # `_` is the activity's raw result
+    as: user
+```
+
+The task-level keys — `options` (`retry_policy`, `execute_locally`, `enable_cache`, `async_mode`)
+and the task's `output` (`set`, `data`, `as`) and `on_error` — are documented once in
+[Activity System](../concepts/activities.md) rather than repeated on each page. The provider pages
+cover only what is specific to an activity:
 
 - **Description** — what it does and when to reach for it.
-- **Input** — the fields of `input_data`, with types, defaults and which are required.
-- **Output** — the shape of the result, which `output_name` captures and `output_data` transforms.
-- **Examples** — real YAML, drawn from `moco-examples/` wherever an example exists.
+- **Input** — the fields of `activity.input`, with types, defaults and which are required.
+- **Output** — the shape of the result, which the task sees as `_` in its `output`.
+- **Examples** — real YAML, drawn from `moco-examples-v2/` wherever an example exists.
 
 ## Conventions across providers
 
@@ -56,7 +74,7 @@ Four exceptions are worth knowing:
 
 The platform default is **60 seconds and 3 attempts**. Activities whose work is not idempotent —
 writes, sends, spend — ship `max_attempts: 1` instead, and the exceptions are called out on each
-page. Override either per call with `retry_policy`.
+page. Override either per call with `options.retry_policy`.
 
 Only the Temporal runtime honours retry, timeout and heartbeat settings; the in-memory runtime
 ignores them.
@@ -78,8 +96,8 @@ Six activities run for as long as their source keeps producing, and deliver what
 They all share the same three fields — `relay_topic`, `relay_event_type` and `target_workflow_id` —
 and the workflow consumes what they publish with `wait_for`.
 
-Two things follow. First, **start them asynchronously**: set `async_mode: true` or put them in a
-parallel branch, or they block the workflow for their whole timeout, which is usually a day. Only
+Two things follow. First, **start them asynchronously**: set `options.async_mode: true` or run them in a
+parallel `tasks` container, or they block the workflow for their whole timeout, which is usually a day. Only
 `rabbit.receive` defaults to async mode. Second, on the Temporal runtime **each relayed payload is a
 workflow signal and a history entry**, and the engine retains at most 1000 unmatched events per
 topic — so these suit low-rate control streams, not high-throughput data feeds.
@@ -92,7 +110,7 @@ Its result is the point, so it blocks by design.
 
 Every activity runs on the `base` worker (task queue `default`) except
 [`claude_agent.query`](./activities/claude-agent.md), which runs on the `agent` worker (task queue
-`agent`). Routing is automatic; nothing in the workflowspec changes. An activity served by a
+`agent`). Routing is automatic; nothing in the wfspec changes. An activity served by a
 different worker type cannot run locally, so `execute_locally` has no effect on it.
 
 Conversely, the browser activities ([Playwright](./activities/playwright.md),
@@ -312,7 +330,7 @@ Seventy-five activities, documented by family on the
 | Family | Activities | Covers |
 | --- | --- | --- |
 | [Namespaces](./activities/deploy.md#namespaces) | `builtin.deploy.namespace.*` (5) | Create, read and delete namespaces |
-| [Workflowspecs](./activities/deploy.md#workflowspecs) | `builtin.deploy.wfspec.*` (4) | Register and list workflowspecs |
+| [Workflowspecs](./activities/deploy.md#workflowspecs) | `builtin.deploy.wfspec.*` (4) | Register and list wfspecs |
 | [Packages and files](./activities/deploy.md#packages-and-files) | `builtin.deploy.package.*` (9) | Versioned packages and their YAML files |
 | [Stages, deployments and targeting](./activities/deploy.md#stages-deployments-and-targeting) | `builtin.deploy.stage.*`, `deployment.*`, `target.*`, `deploy_package`, `undeploy_package` (11) | Rolling a package out to a stage and an audience |
 | [Deployment queries](./activities/deploy.md#deployment-queries) | `builtin.deploy.query.*` (6) | Which version a user resolves to, and why |

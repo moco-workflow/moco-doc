@@ -12,7 +12,7 @@ workflow — you choose when you run it, and the workflow does not change.
 |---|---|---|
 | Where it runs | In one process | Across distributed workers |
 | Durability | None | Full — state survives crashes and restarts |
-| Retries and timeouts | `retry_policy` ignored | Honored |
+| Retries and timeouts | Retry policies ignored | Honored |
 | `start` / `cancel` / `status` | Not available | Available |
 | Waiting for events or long timers | Holds the process open | Free — the workflow is not resident |
 | Latency | Lowest | Higher, per step |
@@ -59,7 +59,7 @@ can wait days for a human to click approve. On the in-memory runtime, the same w
 caller for the duration.
 
 **Retries that mean something.** An activity that fails transiently is retried according to its
-`retry_policy`, with exponential backoff, without the workflow knowing. Only a final failure reaches
+retry policy, with exponential backoff, without the workflow knowing. Only a final failure reaches
 your logic.
 
 **Scale and isolation.** Activities run on workers, separately from workflow orchestration, so you
@@ -76,7 +76,7 @@ reads.
 Everything above. The wfspec is interpreted in a single process, and:
 
 - Nothing is recorded, so nothing recovers. A crash loses the run.
-- `retry_policy` is ignored entirely — activities get one attempt.
+- Retry policies are ignored entirely — activities get one attempt.
 - There is no workflow ID to address, so `moco start`, `status`, `cancel`, `terminate`, and
   `history` are unavailable. The API returns `400` rather than failing quietly.
 - Activities execute in-process rather than on workers.
@@ -90,19 +90,19 @@ shape, skipping the orchestration overhead is a real win. It is also why tests d
 
 Most wfspecs already are. The few things worth knowing:
 
-**Push side effects into activities.** Orchestration logic — conditions, loops, transforms — is
+**Push side effects into activities.** Orchestration logic — conditions, loops, assignments — is
 replayed when a workflow recovers. Anything that touches the outside world belongs in an activity,
-where its result is recorded once and reused on replay. Writing files or calling APIs from a
-`transform` expression is the way to get surprising behaviour after a worker restart.
+where its result is recorded once and reused on replay. Writing files or calling APIs from an
+expression is the way to get surprising behaviour after a worker restart.
 
-**Don't depend on wall-clock time in expressions.** Use `builtin.now` rather than reaching for the
-clock inside a transform, for the same reason: an activity's result is recorded, a re-evaluated
-expression is not.
+**Read the clock with `now()`.** The `now()` and `uuid4()` helpers are replay-safe: on Temporal
+they come from the workflow's deterministic clock and random source. `dt.datetime.now()` does not,
+so a replay can see a different value from the original run.
 
 **Assume activities may run more than once.** With retries enabled, they will. Prefer idempotent
 operations — upserts over inserts, `PUT` over `POST`, or an idempotency key.
 
-**Set `retry_policy` where it matters, and expect it to be ignored in-memory.** A test run that
+**Set retry policies where they matter, and expect them to be ignored in-memory.** A test run that
 passes in-memory has not exercised your retry configuration.
 
 ---
@@ -115,9 +115,10 @@ dispatched to a worker:
 ```yaml
 - activity:
     type: builtin.delay
-    input_data:
+    input:
       duration: 1s
-    execute_locally: true
+    options:
+      execute_locally: true
 ```
 
 This is worth it when the work is shorter than the queue round trip would be. It is not free: a

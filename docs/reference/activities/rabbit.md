@@ -55,16 +55,16 @@ Publishes one message to a topic.
 
 **Example**
 
-From `moco-examples/rmq-demo/src/rmq-publish.yaml`:
-
 ```yaml
-- activity:
+- task_name: publish
+  activity:
     type: rabbit.publish
-    input_data:
+    input:
       topic: "{{ source_topic }}"
       event_type: "{{ event_type }}"
       data: "{{ message }}"
-    output_name: publish_result
+  output:
+    as: publish_result
 ```
 
 ---
@@ -75,7 +75,7 @@ Subscribes to a topic and **relays each message into the running workflow as an 
 workflow picks up with `wait_for`. It runs until the activity is cancelled.
 
 Unlike every other long-running activity, this one **defaults to async mode** — you do not have to
-remember `async_mode: true`, and it will not block your workflow.
+remember `options.async_mode: true`, and it will not block your workflow.
 
 **Input**
 
@@ -110,29 +110,29 @@ Each message arrives at `wait_for` as an event whose `data` is:
 
 **Example**
 
-From `moco-examples/rmq-demo/src/rmq-demo.yaml`:
+Start the subscriber, then wait for a message:
 
 ```yaml
-- activity:
+- task_name: subscribe
+  activity:
     type: rabbit.receive
-    async_mode: true   # non-blocking; keeps relaying in the background
-    input_data:
+    input:
       topic: "demo_topic"          # RabbitMQ source topic
-      relay_topic: "demo_topic"    # == event_source_topic
+      relay_topic: "demo_topic"    # the topic wait_for listens on
       relay_event_type: "rmq_message"
       target_workflow_id: "{{ __sys_info__['workflow_id'] }}"
-```
+    options:
+      async_mode: true   # already the default; shown for clarity
 
-```yaml
-- wait_for:
-    event_source_topic: "demo_topic"
-    event_type: "rmq_message"
+- task_name: next-message
+  wait_for:
+    event:
+      topic: "demo_topic"
+      event_type: "rmq_message"
     timeout_sec: 600
-    output_name: incoming
-
-- transform:
-    output_data:
-      - payload: "{{ incoming['data']['data'] }}"
+  output:
+    data: "{{ _['data']['data'] if _ else None }}"   # null on timeout
+    as: payload
 ```
 
 :::caution An unreachable broker retries forever

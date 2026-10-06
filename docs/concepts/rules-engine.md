@@ -5,19 +5,19 @@ sidebar_position: 6
 
 # Rules Engine
 
-Some logic is a sequence of steps. Some logic is a pile of independent rules — "excellent credit
+Some logic is a series of steps. Some logic is a pile of independent rules — "excellent credit
 means a 95% base chance", "debt-to-income over 43% is an automatic reject" — where nobody can say
 what order they should run in, and where the business owner adding the fifteenth rule should not
 have to understand the other fourteen.
 
-Expressed as a `sequence` of conditionals, that logic becomes a nest of `if` statements whose
-behaviour depends on their ordering. The `rules_engine` statement lets you declare the rules instead
-and leave the ordering to the engine.
+Expressed as a chain of `branches`, that logic becomes a nest of conditionals whose behaviour
+depends on their ordering. The `rules_engine` task lets you declare the rules instead and leave the
+ordering to the engine.
 
 ```yaml
-- rules_engine:
-    name: loan_classification
-    input_data:
+- task_name: loan-classification
+  rules_engine:
+    input:
       facts:
         credit_score: "{{ credit_score }}"
         annual_income: "{{ annual_income }}"
@@ -29,16 +29,17 @@ and leave the ordering to the engine.
           expression: "{{ credit_score >= 750 }}"
         then:
           set_facts:
-            - credit_tier: "excellent"
+            - credit_tier: excellent
             - base_approval_chance: 0.95
-    output_name: derived_facts
+  output:
+    as: derived_facts
 ```
 
 ---
 
 ## Facts and rules
 
-The engine holds a working memory of **facts** — a flat key/value store, seeded from `input_data.facts`
+The engine holds a working memory of **facts** — a flat key/value store, seeded from `input.facts`
 and grown as rules fire.
 
 A **rule** is an `if` / `then` pair:
@@ -64,7 +65,7 @@ A **rule** is an `if` / `then` pair:
 | `if.with_facts` | yes | The facts this rule depends on |
 | `if.expression` | yes | Condition — an expression, or an `and` / `or` / `not` tree |
 | `then.set_facts` | no | Facts asserted when the rule fires |
-| `then.actions` | no | Statements executed when the rule fires |
+| `then.actions` | no | Tasks run when the rule fires |
 
 ### `with_facts` is a declaration, not a convenience
 
@@ -86,8 +87,8 @@ expression the dots become underscores, so the condition reads
 
 ### Conditions
 
-An expression that evaluates truthy fires the rule. For anything beyond a single comparison, use the
-logical operators:
+An expression that evaluates to `True` fires the rule. For anything beyond a single comparison, use
+the logical operators:
 
 ```yaml
 if:
@@ -99,37 +100,57 @@ if:
 ```
 
 `and`, `or`, and `not` nest arbitrarily and short-circuit. They are the same
-[condition syntax](../reference/workflowspec-reference.md) used by statement-level `condition`
-fields.
+[condition syntax](../reference/workflowspec-reference.md) used by `skip_if`, `branches` and
+`raise.if`.
 
 ### Conclusions
 
 `set_facts` asserts facts. Asserted facts are immediately visible to other rules, which is what
 allows multi-step reasoning — one rule derives `credit_tier`, another reads it.
 
-`actions` are full statements, run as a side effect when the rule fires:
+A `set_facts` value is asserted **as written, without evaluation** — `"{{ credit_score }}"` would be
+stored as that literal string. Set constants and flags there. When a fact has to be computed, give a
+task as the value instead: the task runs and its result is asserted.
 
 ```yaml
 then:
   set_facts:
-    - decision: "approved"
+    - risk_band: high                    # a constant
+    - risk_score:                        # a task: its result is the fact
+        task_name: score-risk
+        activity:
+          type: http.request
+          input:
+            method: GET
+            url: "https://api.example.com/risk/{{ applicant_id }}"
+            output_json: true
+```
+
+`actions` are full tasks, run as a side effect when the rule fires:
+
+```yaml
+then:
+  set_facts:
+    - decision: approved
   actions:
-    - emit_event:
-        input_data:
-          topic: loan_events
-          event_type: loan_approved
-          data:
-            applicant_id: "{{ applicant_id }}"
-    - activity:
+    - task_name: announce-approval
+      emit_event:
+        topic: loan_events
+        event_type: loan_approved
+        data:
+          applicant_id: "{{ applicant_id }}"
+    - task_name: notify
+      activity:
         type: http.request
-        input_data:
+        input:
           method: POST
           url: "https://api.example.com/notifications"
 ```
 
-Anything you can write in a workflow body can be an action — an activity, a child workflow, an
-emitted event. Note the asymmetry: `set_facts` feeds the inference, `actions` reach outside it. If
-a rule's output needs to be read by another rule, it belongs in `set_facts`.
+Anything you can write in a workflow's `main` can be an action — an activity, a child workflow, an
+emitted event. Actions run in the **workflow's** scope, not the facts': they read workflow variables
+such as `applicant_id`, not facts. Note the asymmetry: `set_facts` feeds the inference, `actions`
+reach outside it. If a rule's output needs to be read by another rule, it belongs in `set_facts`.
 
 ---
 
@@ -148,7 +169,7 @@ Use it when you have input data and want conclusions: classification, scoring, e
 eligibility.
 
 ```yaml
-input_data:
+input:
   facts:
     credit_score: 720
     annual_income: 85000
@@ -166,18 +187,20 @@ fact, recursively resolves whatever those rules' conditions require, and evaluat
 chain.
 
 ```yaml
-input_data:
+input:
   facts:
     decision: null          # the goal
     credit_score: 720       # what is already known
   run_mode: backward
   fact_resolvers:
     employment_verified:
+      task_name: verify-employment
       activity:
         type: http.request
-        input_data:
+        input:
           method: GET
           url: "https://api.example.com/verify-employment/{{ applicant_id }}"
+          output_json: true
 ```
 
 Use it when deriving everything would be wasteful or expensive — when facts come from paid API calls
@@ -185,7 +208,7 @@ or slow queries and you only want the ones the answer actually depends on.
 
 ### Fact resolvers
 
-`fact_resolvers` maps a fact name to a statement that can produce it on demand. When a rule's
+`fact_resolvers` maps a fact name to a task that can produce it on demand. When a rule's
 condition needs a fact that has not been asserted, the engine runs the resolver and uses the result.
 
 This is what keeps external lookups out of the rules. A rule says `employment_verified == true`; it
@@ -197,25 +220,27 @@ work in forward mode too.
 
 ## Output
 
-A `rules_engine` statement returns the **derived facts**: the facts that rules asserted, not the
-facts you seeded it with.
+A `rules_engine` task's result `_` is the **derived facts**: the facts that rules asserted, not
+the facts you seeded it with.
 
 ```yaml
-- rules_engine:
+- task_name: loan-classification
+  rules_engine:
     # ...
-    output_name: derived_facts
+  output:
+    as: derived_facts
 
-- transform:
-    output_data:
-      - tier: "{{ derived_facts.get('credit_tier', 'unknown') }}"
-      - rejected: "{{ derived_facts.get('auto_reject', False) }}"
+- task_name: summarize
+  set:
+    - tier: "{{ derived_facts.get('credit_tier', 'unknown') }}"
+    - rejected: "{{ derived_facts.get('auto_reject', False) }}"
 ```
 
 Read them with `.get(key, default)` rather than direct indexing. Whether a fact is present depends on
 which rules fired, and that is the point — absence is information.
 
-Like other statements, `rules_engine` accepts `output_data` to reshape the result and `condition` to
-skip the whole block.
+Like other tasks, `rules_engine` accepts `output.data` to reshape the result and `skip_if` to skip
+the whole block.
 
 ---
 
@@ -226,11 +251,11 @@ long-lived reactive session instead: it evaluates what it can, then waits for fa
 the event bus and re-evaluates as they do.
 
 ```yaml
-- rules_engine:
-    name: incident_triage
-    input_data:
+- task_name: incident-triage
+  rules_engine:
+    input:
       facts:
-        service: "checkout"
+        service: checkout
       keep_alive: true
       fact_source_topic: telemetry_facts
       terminate_facts:
@@ -239,7 +264,8 @@ the event bus and re-evaluates as they do.
       max_iterations: 1000
     rules:
       # ...
-    output_name: triage_result
+  output:
+    as: triage_result
 ```
 
 | Field | Purpose |
@@ -254,14 +280,20 @@ Facts arrive as events with `event_type: "set_facts"` and a dict payload of fact
 Events of any other type are ignored, so the topic can be shared with other consumers:
 
 ```yaml
-- emit_event:
-    input_data:
-      topic: telemetry_facts
-      event_type: set_facts
-      data:
-        error_rate: 0.12
-        latency_p99_ms: 2400
+- task_name: push-telemetry
+  emit_event:
+    topic: telemetry_facts
+    event_type: set_facts
+    target_workflow_id: "{{ triage_workflow_id }}"
+    data:
+      error_rate: 0.12
+      latency_p99_ms: 2400
 ```
+
+In a live session a fact that has not arrived yet reads as `None`. A comparison against `None`
+raises, and a condition that raises counts as false — so `cpu_pct >= 85` simply waits for
+`cpu_pct`, but a rule that only tests presence must say `is not None`. Derived facts are never
+retracted, so model escalations rather than toggles.
 
 A session ends when `terminate_facts` are all derived, when `timeout_sec` expires, or when it is
 cancelled. **A timeout is not a failure** — the session returns whatever it managed to derive, so a
@@ -282,22 +314,27 @@ credit tiers are mutually exclusive conditions rather than an if/else chain, whi
 them safe to evaluate in any order.
 
 **Do arithmetic afterwards.** Rules are good at classification — turning numbers into categories and
-modifiers. Combining those modifiers into a final score is a `transform`. Splitting the two keeps
+modifiers. Combining those modifiers into a final score is a `set` task. Splitting the two keeps
 each rule readable and keeps the arithmetic in one place:
 
 ```yaml
-- rules_engine:
+- task_name: loan-classification
+  rules_engine:
     # derives credit_tier, base_approval_chance, income_modifier, employment_modifier
-    output_name: derived_facts
+  output:
+    as: derived_facts
 
-- transform:
-    output_data:
-      - final_score: >-
-          {{ derived_facts.get('base_approval_chance', 0)
-             + derived_facts.get('income_modifier', 0)
-             + derived_facts.get('employment_modifier', 0) }}
-      - decision: "{{ 'approved' if final_score >= 0.70 else 'rejected' }}"
+- task_name: decide
+  set:
+    - _score: >-
+        {{ derived_facts.get('base_approval_chance', 0)
+           + derived_facts.get('income_modifier', 0)
+           + derived_facts.get('employment_modifier', 0) }}
+    - decision: "{{ 'approved' if _score >= 0.70 else 'rejected' }}"
 ```
+
+`_score` is task-local (leading `_`): it exists only while `decide` runs, so only `decision` lands in
+the workflow context.
 
 **Failures are non-fatal, which cuts both ways.** A condition that raises is logged and treated as
 false; a rule that raises while applying its conclusions is logged and skipped. One malformed rule
@@ -314,6 +351,6 @@ all.
 ## Next steps
 
 - [State Machines](./state-machines.md) — the event-driven alternative
-- [Statements Reference](../reference/statements.md) — statements usable as rule actions
+- [Tasks Reference](../reference/statements.md) — task kinds usable as rule actions
 - [Expressions](./expressions.md) — the `{{ }}` language used in conditions
-- The `rules-engine-demo` example project — a full loan-approval rule set
+- The `moco-examples` project's `rules-engine` folder — a full loan-approval rule set and a live session

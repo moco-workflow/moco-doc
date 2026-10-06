@@ -27,7 +27,7 @@ Moco workflows are written in a YAML-based DSL called a **workflowspec** (or **w
 - The DSL fully decouples your workflow from the underlying runtime platform — the spec expresses
   business logic and data contracts, not implementation details.
 - Specs are concise and readable, so they stay reviewable by the people who own the process.
-- A single wfspec can mix **imperative steps**, an event-driven **state machine**, a declarative
+- A single wfspec can mix **imperative tasks**, an event-driven **state machine**, a declarative
   **rules engine**, and composable **child workflows**, so one language covers a wide range of
   use cases.
 - Python expressions can be embedded anywhere in `{{ }}` for dynamic data manipulation, with
@@ -64,8 +64,8 @@ Workflow owners keep full control of the lifecycle through the web console or th
 
 ### Expressive workflow logic
 
-- **Imperative statements** with conditions, parallelism, loops, dynamic expressions, and text
-  templating — including embedded Python expressions with Pandas and Jinja2 for complex data
+- **Imperative tasks** with conditions, parallelism, loops, error handling, reusable functions,
+  dynamic expressions, and text templating — including embedded Python expressions with Pandas and Jinja2 for complex data
   manipulation.
 - **Event-driven state machines** for workflows that react to external events and timers.
 - **Declarative rules engine** for logic that is better expressed as rules than as steps.
@@ -108,50 +108,49 @@ extensible for connecting to other systems, and easy to embed as a component of 
 
 ### A simple multi-step workflow
 
-A workflow that processes an order:
+A workflow that processes an order. `main` holds the workflow's logic as a tree of **tasks**; here a
+`tasks` container runs three of them in order:
 
 ```yaml
-wfspec_name: process-order
-wfspec_version: 1.0.0
+header:
+  schema_version: 2.0.0
+  workflow_name: process-order
 
-input_data:
+input:
   order_id:
   items:
   customer_email:
 
-output_name: result
+output:
+  order_id: '{{ order_id }}'
+  total: '{{ total }}'
+  status: completed
 
-body:
-  sequence:
-    elements:
-      # Calculate total
-      - transform:
-          output_data:
-            - total: "{{ sum([item['price'] for item in items]) }}"
+main:
+  tasks:
+    # Calculate total
+    - set:
+        - total: "{{ sum(item['price'] for item in items) }}"
 
-      # Process payment - child workflow
-      - workflow:
-          wfspec:
-            name: payment-charge
-          child_mode: sync
-          input_data:
-            amount: "{{ total }}"
-          output_name: payment_result
+    # Process payment - a child workflow
+    - task_name: charge-payment
+      workflow:
+        ref: payment-charge
+        mode: sync
+        input:
+          amount: '{{ total }}'
+      output:
+        as: payment_result
 
-      # Send confirmation
-      - activity:
-          type: email.send
-          input_data:
-            to: "{{ customer_email }}"
-            subject: "Order Confirmation"
-            body: "Your order {{ order_id }} has been processed!"
-
-      - transform:
-          output_data:
-            - result:
-                order_id: "{{ order_id }}"
-                total: "{{ total }}"
-                status: completed
+    # Send confirmation
+    - task_name: send-confirmation
+      activity:
+        type: email.send
+        input:
+          from_address: orders@example.com
+          to_addresses: ['{{ customer_email }}']
+          subject: Order Confirmation
+          body_text: Your order {{ order_id }} has been processed!
 ```
 
 ### A human-in-the-loop approval workflow
@@ -160,23 +159,24 @@ The same DSL expresses an event-driven state machine. This one waits for a perso
 reminds them daily for up to three days, and cancels itself if they never do:
 
 ```yaml
-wfspec_name: state-machine-basics-demo
+header:
+  schema_version: 2.0.0
+  workflow_name: state-machine-basics-demo
 
 context:
-  history: []
   score: 0
 
-input_data:
+input:
+  submitter_email: author@example.com
   quality_score: 80
   approval_threshold: 70
 
-output_data:
+output:
   final_state: '{{ final_state }}'
 
-body:
+main:
   state_machine:
     initial_state: draft
-    output_name: final_state
 
     states:
       - name: draft
@@ -187,27 +187,28 @@ body:
 
       - name: in_review
         on_enter:
-          transform:
-            output_data:
-              - score: '{{ quality_score }}' # simulate a score using input data
+          set:
+            - score: '{{ quality_score }}' # simulate a score using input data
 
       - name: approved
         is_terminal: true
         on_enter:
           activity:
             type: email.send
-            input_data:
+            input:
+              from_address: reviews@example.com
+              to_addresses: ['{{ submitter_email }}']
               subject: your submission has been approved
-              # other args omitted for simplicity
 
       - name: rejected
         is_terminal: true
         on_enter:
           activity:
             type: email.send
-            input_data:
+            input:
+              from_address: reviews@example.com
+              to_addresses: ['{{ submitter_email }}']
               subject: your submission has been rejected
-              # other args omitted for simplicity
 
       - name: cancelled
         is_terminal: true
@@ -221,9 +222,10 @@ body:
           action:
             activity:
               type: email.send
-              input_data:
+              input:
+                from_address: reviews@example.com
+                to_addresses: ['{{ submitter_email }}']
                 subject: reminder for your draft
-                # other args omitted for simplicity
 
       - from_state: draft
         to_state: cancelled
@@ -246,6 +248,8 @@ body:
         to_state: rejected
         trigger:
           condition: '{{ score < approval_threshold }}'
+  output:
+    as: final_state # the terminal state reached
 ```
 
 ## Next Steps

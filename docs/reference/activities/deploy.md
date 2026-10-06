@@ -4,15 +4,15 @@ sidebar_label: Deployment & Admin
 
 # Deployment Activities
 
-Sixty-seven activities make up moco's control plane: namespaces, workflowspecs, packages and their
+Seventy-five activities make up moco's control plane: namespaces, workflowspecs, packages and their
 files, stages, deployments and targeting, users and groups, roles and privileges, API keys and audit
 logs.
 
 **Most people never call these directly.** The `moco` CLI and the console drive them through the
-system workflows in `moco-core/src/moco/core/workflow/sys_workflow/` — `moco namespace`,
-`moco deploy`, `moco login` and the rest. Use them when you are automating the platform itself: a
-release pipeline that publishes a package and rolls it out, a provisioning workflow that creates a
-namespace with its roles, a reporting workflow over the audit log.
+platform's system workflows (`sys.*`) — `moco publish`, `moco login` and the rest. Use them when
+you are automating the platform itself: a release pipeline that publishes a package and rolls it
+out, a provisioning workflow that creates a namespace with its roles, a reporting workflow over the
+audit log.
 
 Because they are one CRUD surface over one database, this page documents them **by family** rather
 than one long section per activity: a table covering every activity in the family, then one worked
@@ -62,16 +62,18 @@ A namespace is the top-level grouping for workflowspecs, and the unit access con
 | `builtin.deploy.namespace.get_privileged` | List namespaces where the calling user holds any privilege | — | — |
 | `builtin.deploy.namespace.delete` | Delete a namespace | `namespace_id` | — |
 
-**Example** — from `sys_workflow/sys.deploy.namespace.yaml`:
+**Example**
 
 ```yaml
-- activity:
+- task_name: create-namespace
+  activity:
     type: builtin.deploy.namespace.set
-    input_data:
-      namespace_id: '{{namespace_id}}'
-      namespace_name: '{{namespace_name or namespace_id}}'
-      description: '{{description}}'
-    output_name: result
+    input:
+      namespace_id: "{{ namespace_id }}"
+      namespace_name: "{{ namespace_name or namespace_id }}"
+      description: "{{ description }}"
+  output:
+    as: namespace
 ```
 
 :::note Creating a namespace is more than one activity
@@ -84,8 +86,9 @@ namespace exists with nobody able to use it.
 
 ## Workflowspecs
 
-A wfspec record is the *identity* of a workflow — its name, namespace and ownership. The YAML
-itself lives in package files, versioned separately.
+A wfspec record is the *identity* of a published workflow package — its name (the
+`wfspec_package_name` in `moco.json`), namespace and ownership. The YAML itself lives in package
+files, versioned separately.
 
 | Activity | Purpose | Required input | Optional input |
 | --- | --- | --- | --- |
@@ -97,24 +100,26 @@ itself lives in package files, versioned separately.
 **Example**
 
 ```yaml
-- activity:
-    name: register-wfspec
+- task_name: register-wfspec
+  activity:
     type: builtin.deploy.wfspec.set
-    input_data:
-      wfspec_name: "reporting.daily-summary"
+    input:
+      wfspec_name: "daily-summary"
       namespace_id: "reporting"
       description: "Daily summary report"
       owner: "{{ owner }}"
       tags: ["reporting", "scheduled"]
-    output_name: wfspec
+  output:
+    as: wfspec
 ```
 
 ---
 
 ## Packages and files
 
-A package is one **semantic version** of a wfspec, holding the YAML files that make it up. Versions
-are `version_major.version_minor.version_patch`.
+A package is one **semantic version** of a wfspec, holding the YAML files that make it up — what
+`moco publish` uploads from a project's `moco.json`. Versions are
+`version_major.version_minor.version_patch`.
 
 | Activity | Purpose | Required input | Optional input |
 | --- | --- | --- | --- |
@@ -128,40 +133,80 @@ are `version_major.version_minor.version_patch`.
 | `builtin.deploy.package.file.get` | Fetch one file by name | `package_id`, `filename` | — |
 | `builtin.deploy.package.file.delete` | Delete one file | `file_id` | — |
 
-**Example** — from `sys_workflow/sys.deploy.package.yaml`:
+Each file's `content` is a wfspec document (`header` + `main`). The file with `file_order: 0` is
+the package's entry point: its `header.workflow_name` must equal the package's `wfspec_name`. The
+other files are child workflows the entry point refers to by name. This is the same layout
+`moco publish` produces from `moco.json`:
+
+| `moco.json` | Activity input |
+| --- | --- |
+| `wfspec_package_name` | `wfspec_name` |
+| `wfspec_package_version` (`major.minor.patch`) | `version_major`, `version_minor`, `version_patch` |
+| `wfspec_description`, `manifest` | `manifest` (`{description, ...}`) |
+| files matched by `sources`, entry point first | `files[]` with `file_order` 0, 1, … |
+
+**Example** — publish version 1.2.0 of `daily-summary` with its files in one call. The wfspec
+being published is held with the `#literal` modifier so that its own `{{ }}` expressions are
+stored as written rather than evaluated by the publishing workflow:
 
 ```yaml
-- activity:
-    condition: '{{operator=="set"}}'
-    type: builtin.deploy.package.set
-    input_data:
-      package_id: '{{package_id}}'
-      wfspec_name: '{{wfspec_name}}'
-      version_major: '{{version_major}}'
-      version_minor: '{{version_minor}}'
-      version_patch: '{{version_patch}}'
-    output_name: result
-```
+header:
+  schema_version: 2.0.0
+  workflow_name: publish-daily-summary
 
-Creating a package and its files in one step:
+context:
+  entry_wfspec#literal: |
+    header:
+      schema_version: 2.0.0
+      workflow_name: daily-summary
+    input:
+      day: null
+    output: '{{ summary }}'
+    main:
+      task_name: summarize
+      workflow:
+        ref: fetch-numbers
+        input:
+          day: '{{ day }}'
+      output:
+        as: summary
+  helper_wfspec#literal: |
+    header:
+      schema_version: 2.0.0
+      workflow_name: fetch-numbers
+    input:
+      day: null
+    output: '{{ numbers }}'
+    main:
+      set:
+        - numbers: {day: '{{ day }}', total: 42}
 
-```yaml
-- activity:
-    name: publish-version
+output: '{{ package }}'
+
+main:
+  task_name: publish-version
+  activity:
     type: builtin.deploy.package.create_with_files
-    input_data:
-      wfspec_name: "reporting.daily-summary"
+    input:
+      wfspec_name: "daily-summary"
       version_major: 1
       version_minor: 2
       version_patch: 0
+      manifest:
+        description: "Daily summary report"
       created_by: "{{ __user_info__['user_id'] }}"
       files:
-        - filename: "daily-summary.yaml"
-          file_order: 0
-          content: "{{ wfspec_yaml }}"
-    retry_policy:
-      timeout_sec: 120
-    output_name: package
+        - filename: "src/daily-summary.yaml"
+          file_order: 0                     # the entry point
+          content: "{{ entry_wfspec }}"
+        - filename: "src/fetch-numbers.yaml"
+          file_order: 1
+          content: "{{ helper_wfspec }}"
+    options:
+      retry_policy:
+        timeout_sec: 120
+  output:
+    as: package                             # the package record; its id is package['id']
 ```
 
 :::note Prefer `create_with_files`
@@ -191,42 +236,56 @@ see it — the mechanism behind a staged rollout.
 | `builtin.deploy.deploy_package` | Create the deployment **and** add its targets in one call | `package_id`, `stage_id` | `target_user_ids`, `target_group_ids`, `deployed_by` |
 | `builtin.deploy.undeploy_package` | Deactivate a deployment | `deployment_id` | `performed_by` |
 
-**Example** — from `sys_workflow/sys.deploy.deployment.yaml`:
+**Example** — deploy by hand: create an inactive deployment, target a group, then activate it.
 
 ```yaml
-- activity:
-    condition: '{{operator=="set"}}'
+- task_name: create-deployment
+  activity:
     type: builtin.deploy.deployment.set
-    input_data:
-      deployment_id: '{{deployment_id}}'
-      package_id: '{{package_id}}'
-      stage_id: '{{stage_id}}'
-      deployed_by: '{{deployed_by}}'
-    output_name: result
+    input:
+      package_id: "{{ package['id'] }}"
+      stage_id: "beta"
+      is_active: false
+      deployed_by: "{{ __user_info__['user_id'] }}"
+  output:
+    as: deployment
 
-- activity:
-    condition: '{{operator=="activate"}}'
+- task_name: target-beta-testers
+  activity:
+    type: builtin.deploy.target.add
+    input:
+      deployment_id: "{{ deployment['id'] }}"
+      target_group_id: "{{ beta_group_id }}"
+
+- task_name: activate
+  activity:
     type: builtin.deploy.deployment.activate
-    input_data:
-      deployment_id: '{{deployment_id}}'
-    output_name: result
+    input:
+      deployment_id: "{{ deployment['id'] }}"
 ```
 
 A staged rollout in one activity:
 
 ```yaml
-- activity:
-    name: roll-out-to-beta
+- task_name: roll-out-to-beta
+  activity:
     type: builtin.deploy.deploy_package
-    input_data:
-      package_id: "{{ package['package_id'] }}"
+    input:
+      package_id: "{{ package['id'] }}"
       stage_id: "beta"
-      target_group_ids: ["beta-testers"]
+      target_group_ids: ["{{ beta_group_id }}"]
       deployed_by: "{{ __user_info__['user_id'] }}"
-    retry_policy:
-      timeout_sec: 120
-    output_name: deployment
+    options:
+      retry_policy:
+        timeout_sec: 120
+  output:
+    as: deployment
 ```
+
+:::caution Target before you activate
+An active deployment with no targets applies to every user in the stage. Add targets first (or use
+`deploy_package`, which does both in one call).
+:::
 
 ---
 
@@ -247,14 +306,15 @@ version resolution.
 **Example**
 
 ```yaml
-- activity:
-    name: resolve-version
+- task_name: resolve-version
+  activity:
     type: builtin.deploy.query.get_targeted_wfspec_version
-    input_data:
-      wfspec_name: "reporting.daily-summary"
+    input:
+      wfspec_name: "daily-summary"
       user_id: "{{ target_user }}"
       stage_id: "prod"
-    output_name: resolved     # -> the package record, or null
+  output:
+    as: resolved     # -> the package record, or null
 ```
 
 ---
@@ -272,15 +332,16 @@ version resolution.
 **Example**
 
 ```yaml
-- activity:
-    name: record-login
+- task_name: record-login
+  activity:
     type: builtin.deploy.user.set
-    input_data:
+    input:
       user_id: "{{ user_id }}"
       display_name: "{{ display_name }}"
       email: "{{ email }}"
       record_login: true      # stamps timestamps and promotes a provisional account
-    output_name: user
+  output:
+    as: user
 ```
 
 :::caution Disabling blocks API keys, not tokens
@@ -310,19 +371,20 @@ Groups can contain users and other groups; membership resolves recursively.
 **Example**
 
 ```yaml
-- activity:
-    name: create-group
+- task_name: create-group
+  activity:
     type: builtin.deploy.group.set
-    input_data:
+    input:
       name: "beta-testers"
       description: "Early access cohort"
-    output_name: group
+  output:
+    as: group
 
-- activity:
-    name: add-member
+- task_name: add-member
+  activity:
     type: builtin.deploy.group.member.add
-    input_data:
-      group_id: "{{ group['group_id'] }}"
+    input:
+      group_id: "{{ group['id'] }}"
       member_user_id: "{{ user_id }}"
 ```
 
@@ -382,26 +444,27 @@ are attached to **roles**, and users or groups are members of roles.
 **Example** — granting a namespace role to a group:
 
 ```yaml
-- activity:
-    name: define-role
+- task_name: define-role
+  activity:
     type: builtin.deploy.auth.role.set
-    input_data:
+    input:
       namespace_id: "reporting"
       role_name: "reporting-operator"
       description: "May run and deploy reporting workflows"
-    output_name: role
+  output:
+    as: role
 
-- activity:
-    name: grant-privilege
+- task_name: grant-privilege
+  activity:
     type: builtin.deploy.auth.role.privilege.add
-    input_data:
+    input:
       role_id: "{{ role['role_id'] }}"
       privilege_id: "{{ deploy_privilege_id }}"
 
-- activity:
-    name: add-group-to-role
+- task_name: add-group-to-role
+  activity:
     type: builtin.deploy.auth.role.member.add
-    input_data:
+    input:
       role_id: "{{ role['role_id'] }}"
       group_id: "reporting-team"
 ```
@@ -409,17 +472,20 @@ are attached to **roles**, and users or groups are members of roles.
 Checking effective access:
 
 ```yaml
-- activity:
-    name: may-deploy
+- task_name: may-deploy
+  activity:
     type: builtin.deploy.auth.check_user_privilege
-    input_data:
+    input:
       user_id: "{{ user_id }}"
       privilege_id: "{{ deploy_privilege_id }}"
-    output_name: check          # -> {has_privilege: bool}
+  output:
+    as: check          # -> {has_privilege: bool}
 
-- abort:
-    condition: "{{ not check['has_privilege'] }}"
-    type: raise
+- task_name: require-privilege
+  raise:
+    if: "{{ not check['has_privilege'] }}"
+    type: error
+    error_type: NotAuthorizedError
     message: "{{ user_id }} may not deploy to this namespace"
 ```
 
@@ -444,24 +510,26 @@ Every activity here operates on the **calling user's own keys**.
 
 `apikey.create` returns `{api_key, key_info}`; every other activity returns metadata only.
 
-**Example** — from `sys_workflow/sys.apikey.yaml`:
+**Example** — mint a key and keep only its id in the workflow, so the plaintext never lands in a
+variable:
 
 ```yaml
-- activity:
-    condition: '{{operator=="create"}}'
+- task_name: create-key
+  activity:
     type: builtin.deploy.apikey.create
-    input_data:
-      name: '{{name}}'
-      scopes: '{{scopes}}'
-      expires_at: '{{expires_at}}'
-    output_name: result
+    input:
+      name: "{{ key_name }}"
+      scopes: "{{ scopes }}"
+  output:
+    set:
+      - key_id: "{{ _['key_info']['key_id'] }}"
+    data: null           # the task result would otherwise be the full output, plaintext included
 
-- activity:
-    condition: '{{operator=="revoke"}}'
+- task_name: revoke-key
+  activity:
     type: builtin.deploy.apikey.revoke
-    input_data:
-      key_id: '{{key_id}}'
-    output_name: result
+    input:
+      key_id: "{{ key_id }}"
 ```
 
 :::danger The plaintext key is returned exactly once
@@ -487,12 +555,13 @@ part of the authentication path, not an administrative convenience.
 **Example**
 
 ```yaml
-- activity:
-    name: recent-deploys
+- task_name: recent-deploys
+  activity:
     type: builtin.deploy.audit.get_logs
-    input_data:
+    input:
       stage_id: "prod"
       action: "deploy"
       limit: 50
-    output_name: audit_entries
+  output:
+    as: audit_entries
 ```

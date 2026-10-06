@@ -65,34 +65,36 @@ Each event's `data` is a progress notification from the tool.
 Called synchronously, for the result only — the common case:
 
 ```yaml
-- activity:
-    name: run-remote-tool
+- task_name: run-remote-tool
+  activity:
     type: mcp.call_tool
-    input_data:
+    input:
       endpoint: "https://tools.example.com/mcp"
       tool_name: "summarize_document"
       arguments:
         document_id: "{{ doc_id }}"
       headers:
         Authorization: "Bearer {{ mcp_token }}"
-    retry_policy:
-      timeout_sec: 600
-    output_name: tool_run     # -> stopped, result
+    options:
+      retry_policy:
+        timeout_sec: 600
+  output:
+    as: tool_run     # -> stopped, result
 
-- abort:
-    condition: "{{ tool_run['result'] is None }}"
-    type: raise
+- task_name: check-result
+  raise:
+    if: "{{ tool_run['result'] is None }}"
+    type: error
     message: "MCP tool call produced no result"
 ```
 
-Started asynchronously so the workflow can react to progress, from the provider's integration test:
+Started asynchronously so the workflow can react to progress:
 
 ```yaml
-- activity:
+- task_name: start-tool-call
+  activity:
     type: mcp.call_tool
-    name: start_tool_call
-    async_mode: true
-    input_data:
+    input:
       endpoint: "{{ endpoint }}"
       tool_name: "{{ tool_name }}"
       arguments:
@@ -100,8 +102,12 @@ Started asynchronously so the workflow can react to progress, from the provider'
       relay_topic: mcp.msg
       relay_event_type: mcp_progress
       target_workflow_id: "{{ __sys_info__['workflow_id'] }}"
-    retry_policy:
-      heartbeat_interval_sec: 0.5
+    options:
+      async_mode: true
+      retry_policy:
+        heartbeat_interval_sec: 0.5
+  output:
+    as: call_token
 ```
 
 :::caution A failed tool call is not an activity failure
@@ -111,9 +117,10 @@ successful tool call.
 :::
 
 :::note Async mode is only for progress
-`async_mode: true` lets the workflow continue while the tool runs, but then the activity's
-`result` is not available inline — you receive progress events and must collect the outcome another
-way. Run it synchronously when you just want the answer.
+With `options.async_mode: true` the workflow continues while the tool runs, and the task's result
+is only a token string. The activity's own output (`stopped`, `result`) is published later as an
+event on `options.async_event_topic` (default `default`) whose `event_type` is that token — collect
+it with `wait_for` if you need it. Run the call synchronously when you just want the answer.
 :::
 
 :::caution At-most-once progress

@@ -78,13 +78,14 @@ A list of resources, each `{resource_id, namespace, description}`.
 **Example**
 
 ```yaml
-- activity:
-    name: list-system-resources
+- task_name: list-system-resources
+  activity:
     type: authz.list_resources
-    input_data:
+    input:
       namespace: "system"
       resource_id_pattern: "sys.*"
-    output_name: resources   # -> [{resource_id, namespace, description}, ...]
+  output:
+    as: resources   # -> [{resource_id, namespace, description}, ...]
 ```
 
 ---
@@ -107,12 +108,13 @@ resource has no policy.
 **Example**
 
 ```yaml
-- activity:
-    name: load-policy
+- task_name: load-policy
+  activity:
     type: authz.get_resource_policy
-    input_data:
+    input:
       resource_id: "sys.workflow"
-    output_name: resource_policy
+  output:
+    as: resource_policy
 ```
 
 ---
@@ -144,39 +146,46 @@ A boolean: `true` when the action is granted.
 Gate the rest of the workflow on the check:
 
 ```yaml
-- activity:
-    name: load-policy
+- task_name: load-policy
+  activity:
     type: authz.get_resource_policy
-    input_data:
+    input:
       resource_id: "sys.workflow"
-    output_name: resource_policy
+  output:
+    as: resource_policy
 
-- activity:
-    name: check-execute
+- task_name: check-execute
+  activity:
     type: authz.check_privilege
-    input_data:
+    input:
       resource_policy: "{{ resource_policy }}"
       check_action: execute
       raise_on_deny: true
 ```
 
+A denial fails the task with `NotAuthorizedError`. To recover rather than fail the run, add
+`on_error: {catch: true, do: ...}` to the task; inside `do`, `_` is the error
+(`{error_type, error_message, error_detail}`).
+
 Branching instead of failing:
 
 ```yaml
-- activity:
-    name: may-publish
+- task_name: may-publish
+  activity:
     type: authz.check_privilege
-    input_data:
+    input:
       resource_policy: "{{ resource_policy }}"
       check_action: publish
       extra_evidence:
         target_env: "{{ target_env }}"
-    output_name: can_publish
+  output:
+    as: can_publish
 
-- activity:
-    condition: "{{ can_publish }}"
+- task_name: publish
+  skip_if: "{{ not can_publish }}"
+  activity:
     type: http.request
-    input_data:
+    input:
       method: POST
       url: "{{ publish_url }}"
 ```
@@ -185,8 +194,8 @@ Branching instead of failing:
 
 ## `authz.impersonate_user`
 
-Returns a user identity for another user, which later steps can run as. Use it for a workflow
-acting on someone's behalf — a scheduled job that must see what a particular user sees.
+Returns a user identity for another user. Use it for a workflow acting on someone's behalf — a
+scheduled job that must see what a particular user sees.
 
 **Input**
 
@@ -207,12 +216,13 @@ A user identity:
 **Example**
 
 ```yaml
-- activity:
-    name: act-as-owner
+- task_name: act-as-owner
+  activity:
     type: authz.impersonate_user
-    input_data:
+    input:
       run_as_user_id: "{{ dataset_owner_id }}"
-    output_name: run_as
+  output:
+    as: run_as
 ```
 
 :::caution Impersonating anyone but yourself is privileged

@@ -65,11 +65,10 @@ JSON, otherwise the decoded string.
 Adapted from the provider's integration test:
 
 ```yaml
-- activity:
+- task_name: start-subscription
+  activity:
     type: websocket.subscribe
-    name: start_subscription
-    async_mode: true
-    input_data:
+    input:
       url: "wss://stream.example.com/v1"
       init_messages:
         - action: subscribe
@@ -77,27 +76,32 @@ Adapted from the provider's integration test:
       relay_topic: ws.msg
       relay_event_type: ws_payload
       target_workflow_id: "{{ __sys_info__['workflow_id'] }}"
-    retry_policy:
-      heartbeat_interval_sec: 0.5
+    options:
+      async_mode: true
+      retry_policy:
+        heartbeat_interval_sec: 0.5
 ```
 
 ```yaml
-- wait_for:
-    event_source_topic: ws.msg
-    event_type: ws_payload
+- task_name: next-frame
+  wait_for:
+    event:
+      topic: ws.msg
+      event_type: ws_payload
     timeout_sec: 120
-    output_name: frame
+  output:
+    as: frame
 ```
 
 :::note Handle both shapes
 With `parse_json: true` (the default), a frame that is not valid JSON is relayed as a plain string
 rather than failing. A `wait_for` consumer that assumes a dict will break on a server's
-`"pong"` keepalive — guard with `{{ frame['data'] is mapping }}` or set `parse_json: false` and
+`"pong"` keepalive — guard with `{{ isinstance(frame['data'], dict) }}` or set `parse_json: false` and
 parse it yourself.
 :::
 
 :::caution Start it asynchronously
-Without `async_mode: true` (or a parallel branch) this activity blocks the workflow for a full day.
+Without `options.async_mode: true` (or a parallel `tasks` container) this activity blocks the workflow for a full day.
 :::
 
 :::caution A closed connection looks like success

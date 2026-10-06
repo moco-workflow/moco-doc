@@ -22,17 +22,53 @@ The two providers differ in more than names: Selenium takes an **object** select
 live browser owned by one worker process, so the whole script — from `browser.create` to
 `browser.close` — must stay on that worker.
 
-**This is why every activity on this page runs locally by default** (`execute_locally: true`). A
-local activity always runs in the calling workflow's own worker, which pins the session.
+**This is why every activity on this page runs locally by default**
+(`options.execute_locally: true`). A local activity always runs in the calling workflow's own
+worker, which pins the session.
 
-:::caution Do not set `execute_locally: false`
+```yaml
+- task_name: open-browser
+  activity:
+    type: selenium.browser.create   # local by default
+    input:
+      browser_type: chrome
+  output:
+    as: session
+
+- task_name: browse
+  tasks:
+    - task_name: open-page
+      activity:
+        type: selenium.nav.goto   # same worker as open-browser
+        input:
+          session_id: "{{ session['session_id'] }}"
+          url: https://example.com
+    # ... more page and element tasks
+  on_error:
+    do:   # runs on failure; the error still propagates
+      task_name: close-after-error
+      activity:
+        type: selenium.browser.close
+        input:
+          session_id: "{{ session['session_id'] }}"
+
+- task_name: close-browser
+  activity:
+    type: selenium.browser.close
+    input:
+      session_id: "{{ session['session_id'] }}"
+```
+
+:::caution Do not set `options.execute_locally: false`
 The workflow will still validate and start, but the session is no longer pinned to one worker and
-any step after `browser.create` can fail with an unknown session.
+any task after `browser.create` can fail with an unknown session.
 :::
 
 :::caution Always close the session
 Sessions are per user and expire on a timer, but the per-user cap means leaked sessions eventually
-make `browser.create` fail. A worker restart destroys every live session; there is no reconnection.
+make `browser.create` fail. Close it in an `on_error.do` handler too, as above, so a failure
+mid-script still releases the browser. A worker restart destroys every live session; there is no
+reconnection.
 :::
 
 ## Setup
@@ -121,16 +157,17 @@ Launches Chrome and returns a session id.
 **Example**
 
 ```yaml
-- activity:
-    name: open-browser
+- task_name: open-browser
+  activity:
     type: selenium.browser.create
-    input_data:
+    input:
       browser_type: chrome
       options:
         headless: true
         window_width: 1440
         window_height: 900
-    output_name: session
+  output:
+    as: session
 ```
 
 ### `selenium.browser.close`
@@ -140,10 +177,10 @@ Closes the session.
 **Input** — `session_id`. **Output** — `{success: bool}`.
 
 ```yaml
-- activity:
-    name: close-browser
+- task_name: close-browser
+  activity:
     type: selenium.browser.close
-    input_data:
+    input:
       session_id: "{{ session['session_id'] }}"
 ```
 
@@ -179,14 +216,15 @@ Navigates to a URL.
 **Output** — `{current_url: str, status: str}`.
 
 ```yaml
-- activity:
-    name: open-login
+- task_name: open-login
+  activity:
     type: selenium.nav.goto
-    input_data:
+    input:
       session_id: "{{ session['session_id'] }}"
       url: "https://app.example.com/login"
       timeout: 30
-    output_name: landed
+  output:
+    as: landed
 ```
 
 ### `selenium.nav.back` / `selenium.nav.forward` / `selenium.nav.refresh`
@@ -207,16 +245,17 @@ Clicks the matched element.
 **Output** — `{success: bool}`.
 
 ```yaml
-- activity:
-    name: submit-login
+- task_name: submit-login
+  activity:
     type: selenium.element.click
-    input_data:
+    input:
       session_id: "{{ session['session_id'] }}"
       selector:
         type: css
         value: "button[type=submit]"
-    retry_policy:
-      max_attempts: 1        # submitting twice would be wrong
+    options:
+      retry_policy:
+        max_attempts: 1        # submitting twice would be wrong
 ```
 
 ### `selenium.element.type`
@@ -229,7 +268,7 @@ Types text into an element, clearing it first by default.
 ```yaml
 - activity:
     type: selenium.element.type
-    input_data:
+    input:
       session_id: "{{ session['session_id'] }}"
       selector:
         type: id
@@ -260,16 +299,17 @@ Locates one element or counts several.
 | `elements` | list | Matched element descriptors |
 
 ```yaml
-- activity:
-    name: count-rows
+- task_name: count-rows
+  activity:
     type: selenium.element.find
-    input_data:
+    input:
       session_id: "{{ session['session_id'] }}"
       selector:
         type: css
         value: "table.results tbody tr"
       multiple: true
-    output_name: rows        # -> found, element_count, elements
+  output:
+    as: rows        # -> found, element_count, elements
 ```
 
 ### `selenium.element.get_text`
@@ -277,15 +317,16 @@ Locates one element or counts several.
 **Input** — common fields. **Output** — `{text: str}`.
 
 ```yaml
-- activity:
-    name: read-total
+- task_name: read-total
+  activity:
     type: selenium.element.get_text
-    input_data:
+    input:
       session_id: "{{ session['session_id'] }}"
       selector:
         type: css
         value: ".order-total"
-    output_name: total       # -> text
+  output:
+    as: total       # -> text
 ```
 
 ### `selenium.element.get_attribute`
@@ -344,13 +385,14 @@ Captures the page, or one element.
 **Output** — `{data: str, format: str}` — the base64 image, or the path written to.
 
 ```yaml
-- activity:
-    name: capture
+- task_name: capture
+  activity:
     type: selenium.page.screenshot
-    input_data:
+    input:
       session_id: "{{ session['session_id'] }}"
       output_format: base64
-    output_name: shot        # -> data, format
+  output:
+    as: shot        # -> data, format
 ```
 
 :::note Prefer `file` for large captures
@@ -366,13 +408,14 @@ Runs JavaScript in the page and returns its result.
 **Output** — `{result: any}`.
 
 ```yaml
-- activity:
-    name: read-app-state
+- task_name: read-app-state
+  activity:
     type: selenium.page.execute_script
-    input_data:
+    input:
       session_id: "{{ session['session_id'] }}"
       script: "return window.__APP_STATE__.orders.length;"
-    output_name: order_count   # -> result
+  output:
+    as: order_count   # -> result
 ```
 
 ---
@@ -395,10 +438,10 @@ Waits for an element to reach a condition.
 **Output** — `{success: bool, waited_seconds: number}`.
 
 ```yaml
-- activity:
-    name: wait-for-results
+- task_name: wait-for-results
+  activity:
     type: selenium.wait.element
-    input_data:
+    input:
       session_id: "{{ session['session_id'] }}"
       selector:
         type: css

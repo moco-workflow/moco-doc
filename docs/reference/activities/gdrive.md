@@ -49,7 +49,7 @@ Every download and upload picks a format:
 
 | Format | Where the bytes live | Use it when |
 | --- | --- | --- |
-| `base64` (default) | Inline in workflow context, as a base64 string | The file is small and a later step needs its content |
+| `base64` (default) | Inline in workflow context, as a base64 string | The file is small and a later task needs its content |
 | `file` | On the worker's filesystem, under `MOCO_GDRIVE_FILE_DIR` | The file is large, or a later `shell.run` needs it on disk |
 
 `base64` copies the payload into workflow history, so keep it to small files. `file` paths are
@@ -69,8 +69,8 @@ always relative to `MOCO_GDRIVE_FILE_DIR`; paths that escape that directory are 
 Drive allows several files to share a name in one folder, so a retried create leaves a duplicate
 behind. The idempotent paths are `upload` with an explicit `file_id` (which replaces that file's
 contents in place) and `create_folder` with `skip_if_exists: true`; with either of those set it is
-safe to raise `max_attempts` via the activity's `retry_policy`. `delete` is destructive, so a retry
-after an ambiguous failure could remove a file recreated in between.
+safe to raise `max_attempts` in the task's `options.retry_policy`. `delete` is destructive, so a
+retry after an ambiguous failure could remove a file recreated in between.
 :::
 
 #### DriveFile
@@ -124,17 +124,18 @@ Returns one page; pass the returned `next_page_token` back as `page_token` for t
 **Example**
 
 ```yaml
-- activity:
+- task_name: find-latest-report
+  activity:
     type: gdrive.list
-    name: find-latest-report
-    input_data:
+    input:
       auth: "{{ gdrive_auth }}"
       parent_folder_id: "{{ inbox_folder_id }}"
       name_contains: "monthly-report"
       order_by: "modifiedTime desc"
       page_size: 10
-    output_name: found      # -> files[{file_id, name, mime_type, size_bytes, ...}], file_count,
-                            #    next_page_token
+  output:
+    as: found      # -> files[{file_id, name, mime_type, size_bytes, ...}], file_count,
+                   #    next_page_token
 ```
 
 ---
@@ -169,29 +170,31 @@ Downloads a file's content, either inline as base64 or onto the worker's disk.
 **Example**
 
 ```yaml
-- activity:
+- task_name: fetch-report
+  activity:
     type: gdrive.download
-    name: fetch-report
-    input_data:
-      file_id: "{{ found.files[0].file_id }}"
+    input:
+      file_id: "{{ found['files'][0]['file_id'] }}"
       auth: "{{ gdrive_auth }}"
       output_format: base64           # or 'file' plus a file_path
-    output_name: report   # -> file_id, name, mime_type, size_bytes, format, data, exported
+  output:
+    as: report   # -> file_id, name, mime_type, size_bytes, format, data, exported
 ```
 
 ```yaml
-- activity:
+- task_name: download-to-disk
+  activity:
     type: gdrive.download
-    name: download-to-disk
-    input_data:
+    input:
       file_id: "{{ uploaded_file_id }}"
       auth: "{{ gdrive_auth }}"
       output_format: file
       file_path: "gdrive-demo/{{ file_name }}"
-    output_name: downloaded_file
+  output:
+    as: downloaded_file
 ```
 
-`format` echoes which of the two `data` holds, so a downstream step can branch on it.
+`format` echoes which of the two `data` holds, so a downstream task can branch on it.
 
 :::note Google-native documents are exported
 Docs, Sheets, Slides and Drawings have no stored bytes and cannot be downloaded directly; they are
@@ -236,29 +239,31 @@ file's content when `file_id` is given.
 **Examples**
 
 ```yaml
-- activity:
+- task_name: publish-summary
+  activity:
     type: gdrive.upload
-    name: publish-summary
-    input_data:
+    input:
       name: "summary-{{ run_date }}.csv"
       auth: "{{ gdrive_auth }}"
       data: "{{ base64.b64encode(summary_csv.encode()).decode() }}"
       parent_folder_id: "{{ output_folder_id }}"
       mime_type: "text/csv"       # optional; guessed from the file name when omitted
-    output_name: published        # -> file_id, name, mime_type, size_bytes, web_view_link, parents
+  output:
+    as: published        # -> file_id, name, mime_type, size_bytes, web_view_link, parents
 ```
 
 ```yaml
-- activity:
+- task_name: publish-large-export
+  activity:
     type: gdrive.upload
-    name: publish-large-export
-    input_data:
+    input:
       name: "export.parquet"
       auth: "{{ gdrive_auth }}"
       source_format: file
       file_path: "exports/export.parquet"   # relative to MOCO_GDRIVE_FILE_DIR
       parent_folder_id: "{{ output_folder_id }}"
-    output_name: published
+  output:
+    as: published
 ```
 
 Set `mime_type` to a Google-native type (e.g. `application/vnd.google-apps.spreadsheet`) to have
@@ -269,7 +274,7 @@ useful extension:
 ```yaml
 - activity:
     type: gdrive.upload
-    input_data:
+    input:
       name: "Q3 numbers"          # no extension, so the source format can't be guessed
       auth: "{{ gdrive_auth }}"
       data: "{{ base64.b64encode(csv_text.encode()).decode() }}"
@@ -297,13 +302,14 @@ A [DriveFile](#drivefile).
 **Example**
 
 ```yaml
-- activity:
+- task_name: describe-report
+  activity:
     type: gdrive.get_metadata
-    name: describe-report
-    input_data:
+    input:
       file_id: "{{ uploaded_file_id }}"
       auth: "{{ gdrive_auth }}"
-    output_name: metadata  # -> file_id, name, mime_type, size_bytes, parents, ...
+  output:
+    as: metadata  # -> file_id, name, mime_type, size_bytes, parents, ...
 ```
 
 ---
@@ -334,12 +340,13 @@ the same parent instead of creating a second one — which also makes the activi
 ```yaml
 - activity:
     type: gdrive.create_folder
-    input_data:
+    input:
       name: "{{ run_date }}"
       auth: "{{ gdrive_auth }}"
       parent_folder_id: "{{ archive_folder_id }}"
       skip_if_exists: true      # reuse a folder of this name instead of creating a second one
-    output_name: run_folder     # -> folder{file_id, name, ...}, created
+  output:
+    as: run_folder     # -> folder{file_id, name, ...}, created
 ```
 
 ---
@@ -368,11 +375,12 @@ Moves a file or folder to the trash, or deletes it outright.
 ```yaml
 - activity:
     type: gdrive.delete
-    input_data:
+    input:
       file_id: "{{ stale_file_id }}"
       auth: "{{ gdrive_auth }}"
       permanent: false          # move to trash (default); true deletes outright
-    output_name: deleted        # -> file_id, permanent
+  output:
+    as: deleted        # -> file_id, permanent
 ```
 
 :::caution Deleting a folder deletes its contents
@@ -381,8 +389,8 @@ And `permanent: true` cannot be undone. Prefer the default trash behaviour unles
 
 ---
 
-A complete runnable example — create a folder, upload a report, list it, download it back and clean
-up — lives in `moco-examples/gdrive-demo/`.
+A complete runnable example — create a folder, upload a file, list it, download it back and clean
+up — lives in `moco-examples-v2/activities/gdrive.yaml`.
 
 To index Drive documents for retrieval, see
 [`llama_index.index_gdrive`](./llama-index.md#llama_indexindex_gdrive), which reuses the same

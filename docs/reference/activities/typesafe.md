@@ -108,10 +108,10 @@ retried.
 **Example**
 
 ```yaml
-- activity:
-    name: triage-ticket
+- task_name: triage-ticket
+  activity:
     type: typesafe.system_one
-    input_data:
+    input:
       state: "{{ ticket_body }}"
       questions:
         billing:
@@ -128,12 +128,13 @@ retried.
           type: score
           instructions: How urgent is this ticket?
           criteria: [low, medium, high]
-    output_name: triage
-- transform:
-    name: escalate
-    condition: "{{ triage['nouls']['billing'] > 0.5 and triage['choices']['tone'] == 'angry' }}"
-    output_data:
-      - route: billing-escalation
+  output:
+    as: triage
+- task_name: escalate
+  skip_if:
+    not: "{{ triage['nouls']['billing'] > 0.5 and triage['choices']['tone'] == 'angry' }}"
+  set:
+    - route: billing-escalation
 ```
 
 Output for this example from a local Laya server, with `answers` and `raw` omitted:

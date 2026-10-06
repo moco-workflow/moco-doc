@@ -40,7 +40,7 @@ A non-zero exit code is **not** an error by default — the activity returns nor
 | `check` | bool | no | `false` | Raise and fail the activity when the exit code is non-zero |
 | `cwd` | str | no | worker's cwd | Working directory for the command |
 | `env` | dict[str, str] | no | `null` | Extra environment variables |
-| `timeout` | number | no | `retry_policy.timeout_sec` | Seconds before the process is killed |
+| `timeout` | number | no | `options.retry_policy.timeout_sec` | Seconds before the process is killed |
 | `text` | bool | no | `true` | Decode output as text. When false, `stdout`/`stderr` are raw bytes |
 | `encoding` | str | no | `"utf-8"` | Decoding used when `text` is true |
 
@@ -54,50 +54,66 @@ A non-zero exit code is **not** an error by default — the activity returns nor
 
 **Examples**
 
-Reading a file into workflow context, from `moco-examples/task-manager/tests/run-all-tests.yaml`:
+Reading a file into a workflow variable:
 
 ```yaml
-- activity:
-    name: load-submit-task-tests
+- task_name: load-submit-task-tests
+  activity:
     type: shell.run
-    input_data:
-      command: "cat {{ test_dir }}/submit-task.test.yaml"
-    output_data:
-      - submit_task_yaml: "{{ _raw_output['stdout'] }}"
+    input:
+      command: 'cat {{ test_dir }}/submit-task.test.yaml'
+  output:
+    set:
+      - submit_task_yaml: '{{ _["stdout"] }}'
 ```
 
 Running a script that has side effects — note `max_attempts: 1`:
 
 ```yaml
-- activity:
-    name: rebuild-index
+- task_name: rebuild-index
+  activity:
     type: shell.run
-    input_data:
-      command: "./bin/reindex.sh --since {{ since_date }}"
-      cwd: "/opt/pipeline"
+    input:
+      command: './bin/reindex.sh --since {{ since_date }}'
+      cwd: /opt/pipeline
       env:
         PIPELINE_MODE: batch
       check: true            # non-zero exit fails the activity
       timeout: 900
-    retry_policy:
-      timeout_sec: 900
-      max_attempts: 1        # the script is not idempotent
-    output_name: reindex     # -> return_code, stdout, stderr
+    options:
+      retry_policy:
+        timeout_sec: 900
+        max_attempts: 1      # the script is not idempotent
+  output:
+    as: reindex              # -> return_code, stdout, stderr
+```
+
+Branching on the exit code without `check`:
+
+```yaml
+- task_name: probe-service
+  activity:
+    type: shell.run
+    input:
+      command: 'curl -sf http://localhost:8080/health'
+  output:
+    set:
+      - service_up: '{{ _["return_code"] == 0 }}'
 ```
 
 :::caution The default retry policy runs the command up to three times
-`shell.run` inherits the platform default of 3 attempts. Set `max_attempts: 1` for any command
+`shell.run` inherits the platform default of 3 attempts. Set `options.retry_policy.max_attempts: 1` for any command
 with side effects.
 :::
 
 :::note Timeouts nest
-When `timeout` is omitted it inherits `retry_policy.timeout_sec`, so the process can never outlive
+When `timeout` is omitted it inherits `options.retry_policy.timeout_sec`, so the process can never outlive
 its own activity budget. Set `timeout` explicitly only when you want the process killed sooner
 than the activity gives up.
 :::
 
 :::note Secrets in `env` are plaintext
-Anything you put in `env` is written in the workflowspec and passed through workflow context. To
+Anything you put in `env` is written in the wfspec and passed through workflow context. To
 use a credential, resolve it inside an activity that accepts a `*_secret_key` field instead — see
 [Secret Activities](./secret.md).
 :::

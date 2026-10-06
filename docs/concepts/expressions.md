@@ -4,422 +4,350 @@ sidebar_position: 4
 
 # Expression Syntax
 
-Expressions are the heart of Moco's dynamic behavior. They use Python syntax enclosed in `{{ }}` delimiters to evaluate data at runtime.
-
-## Basic Syntax
-
-Expressions use double curly braces:
+Expressions compute values at runtime. They are sandboxed Python expressions inside `{{ }}`, and
+they can appear in almost any value of a wfspec: `context`, `set`, `output`, an activity's `input`,
+a condition.
 
 ```yaml
-# String interpolation
-greeting: "Hello, {{ name }}!"
-
-# Full evaluation
-total: "{{ price * quantity }}"
-
-# Boolean expression
-is_valid: "{{ price > 0 and quantity > 0 }}"
-
-# Complex expression
-result: "{{ sum([x * 2 for x in range(10)]) }}"
+- set:
+    - greeting: 'Hello, {{ name }}!'                     # string interpolation
+    - total: '{{ price * quantity }}'                    # a number
+    - is_valid: '{{ price > 0 and quantity > 0 }}'       # a bool
+    - squares: '{{ [x ** 2 for x in range(5)] }}'        # a list
 ```
 
-## Expression Types
+## Typed values and interpolated strings
 
-Moco supports different expression evaluation modes.
+How a value is evaluated depends on its shape:
 
-### Python (Default)
+| Value | Result |
+|---|---|
+| No `{{` at all: `pending` | The value itself |
+| Exactly one `{{ e }}` (surrounding whitespace allowed): `'{{ [1, 2] }}'` | The **typed** value of `e`: here the list `[1, 2]` |
+| Text mixed with `{{ }}`: `'n={{ [1, 2] }}'` | A **string**: each `{{ e }}` is replaced by `str(e)`, giving `'n=[1, 2]'` |
+| A mapping or list | Each value or element evaluated by the same rules. Keys are not evaluated |
+| Any other scalar: `42`, `true` | The value itself |
 
-Standard Python expression evaluation:
+So `count: '{{ len(items) }}'` stores an integer, while `label: '{{ len(items) }} items'` stores a
+string. Quote expression values in YAML: an unquoted value starting with `{` is read as a mapping.
+
+An expression may span several lines; newlines inside `{{ }}` are treated as spaces:
 
 ```yaml
-# Arithmetic
-result: "{{ 10 + 20 * 3 }}"          # 70
-
-# String methods
-upper: "{{ name.upper() }}"
-
-# List comprehension
-squares: "{{ [x**2 for x in range(5)] }}"  # [0, 1, 4, 9, 16]
-
-# Dictionary access
-value: "{{ data['key'] }}"
-value: "{{ data.get('key', 'default') }}"
-
-# Conditional
-discount: "{{ price * 0.1 if price > 100 else 0 }}"
+- set:
+    - stats: |
+        {{
+          {
+            "headcount": len(people),
+            "avg_salary": round(sum(p["salary"] for p in people) / len(people), 1)
+          }
+        }}
 ```
 
-### Python Glom
+## Name resolution
 
-Path-based data extraction using the glom library:
+A bare name in an expression is looked up in this order:
+
+1. the reserved names below (`_`, `__context__`, `__sys_info__`, ...);
+2. the current task's locals (`_name`);
+3. container scopes (`name@`), innermost first;
+4. the workflow context (`context`, `input`, and everything written without a marker).
+
+A name that is not found is a `NameError`. To test whether a variable exists, ask `__context__`:
 
 ```yaml
-# Extract nested value
-user_name: "{{ user.profile.name }}"
-
-# With type specification
-user_name#python_glom: "user.profile.name"
-
-# Extract list of values
-all_names#python_glom: "users.*.name"
-
-# Complex glom spec
-data#python_glom: "orders.0.items.*.price"
+- set:
+    - tier: '{{ tier if "tier" in __context__ else "standard" }}'
 ```
 
-### Literal
+See [Workflowspec Structure](./workflowspec.md#data-flow) for where each kind of variable lives.
 
-No evaluation - treat as literal string:
+### Reserved names
+
+| Name | Value |
+|---|---|
+| `_` | The current task's raw result, inside its `output` (and the error, inside `on_error.do`) |
+| `__context__` | A read-only mapping of every visible variable, merged innermost-first |
+| `__sys_info__` | Information about the run (table below) |
+| `__user_info__` | Who started the run |
+| `event` | The current event, inside `wait_for.event.match_expression` and state machine callbacks and conditions |
+
+A loop also binds its `foreach` variable (default `item`) and, if given, its `index` variable. None
+of the reserved names can be assigned.
+
+`_` depends on the task kind: an activity's output, a child workflow's output, the list of a loop's
+iteration results, and so on. The full table is in
+[Workflowspec Structure](./workflowspec.md#a-tasks-result-_-and-output).
 
 ```yaml
-# Keep template syntax as-is
-template#literal: "{{ this_is_not_evaluated }}"
-
-# Useful for passing templates to other systems
-jinja_template#literal: "Hello {{ user_name }}!"
+- task_name: fetch-user
+  activity:
+    type: http.request
+    input:
+      method: GET
+      url: 'https://api.example.com/users/{{ user_id }}'
+      output_json: true
+  output:
+    data: '{{ _["json"] }}'          # the parsed response body
+    as: user
 ```
 
-### Jinja2
-
-Jinja2 template evaluation:
-
-```yaml
-# Jinja2 template
-message#jinja: >
-  Dear {{ customer.name }},
-  Your order #{{ order.id }} has been {{ order.status }}.
-  {% if order.status == 'shipped' %}
-  Tracking: {{ order.tracking_number }}
-  {% endif %}
-```
-
-## Available in Expressions
-
-### Python Builtins
-
-Whitelisted safe builtins. `eval`, `exec`, `open`, `compile`, `globals`, `getattr`/`setattr` and
-the other introspection builtins are removed; `__import__` is unreachable because the expression
-scanner rejects the name outright.
-
-```python
-abs, all, any, bool, dict, enumerate, filter, float, int, len, list,
-map, max, min, range, reversed, round, set, sorted, str, sum, tuple, zip
-```
-
-Examples:
-
-```yaml
-# Built-in functions
-total: "{{ sum(prices) }}"
-count: "{{ len(items) }}"
-maximum: "{{ max(values) }}"
-rounded: "{{ round(price, 2) }}"
-
-# Type conversions
-as_int: "{{ int(value) }}"
-as_str: "{{ str(number) }}"
-as_list: "{{ list(range(5)) }}"
-```
-
-### Libraries
-
-Pre-imported libraries available in expressions:
-
-```python
-import numpy as np
-import pandas as pd
-import pyarrow as pa
-import glom          # the module: call glom.glom(...), not glom(...)
-import bs4           # bs4.BeautifulSoup(...)
-```
-
-Each is exposed through a read-only proxy, so **submodules are not reachable** — `pd.io`,
-`pd.api`, `np.random`, `np.ctypeslib`, `glom.core` and `pa.fs` all raise. Functions that read or
-write the filesystem are either restricted to in-memory buffers (`pd.read_csv(StringIO(...))` is
-fine, `pd.read_csv('/path')` is not) or removed (`pd.read_pickle`, `np.load`). For YAML, only
-`safe_load`, `safe_dump` and `dump` are available.
-
-Examples:
-
-```yaml
-# NumPy
-mean: "{{ np.mean([1, 2, 3, 4, 5]) }}"
-array: "{{ np.array([1, 2, 3]) }}"
-
-# Pandas
-df: "{{ pd.DataFrame({'col1': [1, 2], 'col2': [3, 4]}) }}"
-filtered: "{{ df[df['col1'] > 1] }}"
-
-# Glom for complex data extraction (data paths only — no attribute traversal)
-value: "{{ glom.glom(data, 'path.to.nested.value') }}"
-```
-
-### Special Variables
-
-| Variable | Description |
-|----------|-------------|
-| `_` | Root context (all variables) |
-| `_raw_output` | Raw output from last statement |
-| `iter_item` | Current item in iteration |
-| `iter_items` | All items in iteration |
-| `__user_info__` | User information object |
-| `__sys_info__` | System information |
-
-**System Info (`__sys_info__`):**
+**`__sys_info__`** is a mapping; read it with `["key"]` or `.get("key")`:
 
 | Field | Description |
 |-------|-------------|
 | `trace_id` | Root trace identifier, shared by the parent and every child workflow |
 | `workflow_id` | This workflow instance's ID |
-| `tier` | Execution tier (`dev`, `beta`, `prod`) — useful for pointing at a staging endpoint outside production |
-| `wfspec_name`, `wfspec_version` | The running spec's identity |
-| `wfspec_callstack` | The chain of specs that led here |
-| `is_continue_as_new` | `True` when this execution was restarted by a [continue-as-new checkpoint](../reference/statements.md#continue_as_new_checkpoint). Always a bool, so it is safe to use directly as a condition |
+| `tier` | Execution tier (`dev`, `beta`, `prod`): useful for pointing at a staging endpoint outside production |
+| `wfspec_name`, `wfspec_version` | The running workflow's `header.workflow_name` and its package version |
+| `wfspec_callstack` | The chain of workflows that led here |
+| `is_continue_as_new` | `True` when this execution was restarted by a [checkpoint](../reference/statements.md). Always a bool, so it is safe to use directly as a condition |
 | `state_machine` | Info about the enclosing state machine; present only while one is running |
 | `debug_mode`, `enable_otel_trace` | Whether debug events and OTel tracing are on for this run |
 
-There is no current-timestamp field here — use the `builtin.now` activity, whose result is recorded
-and therefore stable across a replay.
-
-Examples:
+**`__user_info__`** holds `user_id`, `user_org`, `requester_user_id` and `auth_mode`.
 
 ```yaml
-# Access all variables
-all_data: "{{ _ }}"
-
-# System info
-trace: "{{ __sys_info__.trace_id }}"
-wf_id: "{{ __sys_info__['workflow_id'] }}"
-
-# Iteration
-- iteration:
-    input_data: "{{ [1, 2, 3] }}"
-    body:
-      transform:
-        output_data:
-          - current: "{{ iter_item }}"           # 1, then 2, then 3
-          - all: "{{ iter_items }}"              # [1, 2, 3]
+- set:
+    - user_id: '{{ __user_info__.get("user_id") }}'
+    - workflow_id: '{{ __sys_info__["workflow_id"] }}'
 ```
 
-## Variable Modifiers
+## Variable modifiers
 
-Modifiers control how variables are evaluated and stored.
-
-### Syntax
+The name you write to (in `context`, `set`, `output.set`, `output.as`, and the `input` maps of
+`activity`, `workflow` and `rules_engine`) can carry markers that change where the value is stored
+and how it is evaluated:
 
 ```
-variableName[@][#modifier...][#]
+[_]name[@][#modifier...][#]
 ```
 
-### Container Scope (`@`)
+| Marker | Meaning |
+|---|---|
+| `_name` | Task-local: visible to the rest of this task's `set` / `output`, then discarded |
+| `name@` | Container scope: the nearest enclosing `tasks` container or loop iteration |
+| `name#python` | Evaluate as a Python expression (the default) |
+| `name#literal` | Do not evaluate: keep the text, braces included |
+| `name#jinja` | Render as a sandboxed Jinja2 template |
+| `name#python_glom` | Evaluate as a glom spec over `__context__` |
+| `name#` (trailing) | Log the stored value as a debug event, streamed to the CLI |
 
-Variables with `@` are temporary and not saved to global context:
+The markers are stripped before the value is stored: `total#` stores `total`. A name cannot both
+start with `_` and end with `@`, and an unknown modifier is rejected by validation. Scope markers
+only have an effect in `set`, `output.set` and `output.as`.
+
+### `#literal`
+
+Keep `{{ }}` as text, for a template meant to be rendered later or by another system:
 
 ```yaml
-- transform:
-    output_data:
-      - temp@: "{{ compute_expensive() }}"  # Temporary
-      - result: "{{ temp * 2 }}"            # Can use temp
-      # temp is NOT saved to context after this
+- set:
+    - template#literal: 'Hello {{ user_name }}!'
 ```
 
-**Use for:**
-- Intermediate calculations
-- Large data you don't need to persist
-- Reducing context size
+### `#jinja`
 
-Example:
+Render with Jinja2, which has statements (`if`, `for`) and filters that a single Python expression
+cannot express. Every visible variable is in the template's context:
 
 ```yaml
-- transform:
-    output_data:
-      - subtotal@: "{{ sum(item_prices) }}"
-      - tax@: "{{ subtotal * 0.08 }}"
-      - shipping@: "{{ 5.99 if subtotal < 50 else 0 }}"
-      - total: "{{ subtotal + tax + shipping }}"
-      # Only 'total' is saved
+- set:
+    - message#jinja: |
+        Dear {{ customer.name }},
+        Your order #{{ order.id }} has been {{ order.status }}.
+        {% if order.status == 'shipped' %}
+        Tracking: {{ order.tracking_number }}
+        {% endif %}
 ```
 
-### Debug Logging (`#`)
+### `#python_glom`
 
-Trailing `#` logs the variable value:
+The value is a Python expression for a [glom](https://glom.readthedocs.io) spec, applied to
+`__context__`. A path must therefore be a **quoted string**:
 
 ```yaml
-- transform:
-    output_data:
-      - debug_value#: "{{ computation() }}"   # Logs value
-      - result: "{{ debug_value * 2 }}"
+- set:
+    - first_dept#python_glom: '"people.0.dept"'          # people[0]["dept"]
+    - names#python_glom: '("users", ["name"])'           # [u["name"] for u in users]
 ```
 
-### Force Expression Type
+### Multi-stage evaluation
 
-Override default expression evaluation:
+Modifiers are applied left to right, each to the previous result, so `#python#python` evaluates
+twice. Use it when a variable holds an expression:
 
 ```yaml
-- transform:
-    output_data:
-      # Force literal (don't evaluate)
-      - template#literal: "{{ user_name }}"
-
-      # Force glom path
-      - user_name#python_glom: "user.profile.name"
-
-      # Force Jinja2
-      - message#jinja: "Hello {{ name }}!"
-
-      # Force python (redundant, but explicit)
-      - value#python: "{{ 1 + 1 }}"
+- set:
+    - template#literal: '{{ total }}'
+    - total: 42
+    - resolved#python#python: '{{ template }}'   # pass 1: '{{ total }}'   pass 2: 42
 ```
 
-### Multi-stage Evaluation
+### Debug logging with a trailing `#`
 
-Chain modifiers for multiple evaluation passes:
+A trailing `#` emits the stored value as a debug event, which `moco run` prints as the workflow
+runs. It is the main debugging tool, and it combines with the other markers:
 
 ```yaml
-- transform:
-    output_data:
-      - var1: "result_var"
-      - var2: "{{ var1 }}"                  # "result_var"
-      - result_var: 42
-      - nested#python#python: "{{ var2 }}"  # First: "{{ var1 }}" -> "result_var"
-                                            # Second: "{{ result_var }}" -> 42
+- set:
+    - users#: '{{ load_users }}'                         # log the value
+    - greeting@#: 'Hello {{ user["name"] }}'             # container scope, logged
+    - greeting_html@#jinja#: '<h1>{{ user.name }}</h1>'  # scope, Jinja2, logged
 ```
 
-**Use for:**
-- Dynamic variable references
-- Meta-evaluation
-- Template-in-template scenarios
+### Assigning into a structure
 
-### Combined Modifiers
-
-Combine multiple modifiers:
+In `set` and `output.set`, a key that is itself an expression assigns into an existing variable.
+Only literal subscripts are allowed:
 
 ```yaml
-# Temporary + debug logging
-temp@#: "{{ expensive_calc() }}"
-
-# Container scope + force literal
-intermediate@#literal: "{{ template }}"
-
-# Debug + glom + multi-stage
-extracted#python_glom#python#: "path.to.value"
+- set:
+    - '{{ order["status"] }}': shipped
+    - '{{ totals["eu"]["count"] }}': '{{ totals["eu"]["count"] + 1 }}'
 ```
 
-## Common Patterns
+## Conditions
 
-### Conditional Logic
+`skip_if`, `raise.if`, the `if` / `elif` of `branches`, `wait_for.event.match_expression` and
+state machine and rule conditions all take a **condition**: an expression that evaluates to a
+`bool`, or a tree of `and`, `or` and `not`:
 
 ```yaml
-# Ternary operator
-discount: "{{ price * 0.1 if is_premium else 0 }}"
+- task_name: domestic-adult-member
+  skip_if:
+    not:
+      and:
+        - '{{ age >= 18 }}'
+        - '{{ country == "US" }}'
+        - '{{ is_member }}'
+  set:
+    - tier: domestic-premium
 
-# Multiple conditions
-tier: "{{ 'gold' if points > 1000 else 'silver' if points > 500 else 'bronze' }}"
-
-# Boolean logic
-valid: "{{ price > 0 and quantity > 0 and in_stock }}"
+- task_name: eligible
+  skip_if:
+    or:
+      - '{{ is_banned }}'
+      - '{{ age < 13 }}'
+  set:
+    - eligible: true
 ```
 
-### List Operations
+`and` and `or` take a non-empty list and short-circuit; the forms nest freely.
+
+**A condition must evaluate to exactly `True` or `False`.** Any other value, such as a list, a
+string or `None`, fails the task with a `ConditionTypeError` rather than being treated as truthy.
+Say what you mean:
+
+| Instead of | Write |
+|---|---|
+| `'{{ items }}'` | `'{{ len(items) > 0 }}'` |
+| `'{{ user_id }}'` | `'{{ user_id is not None }}'` or `'{{ bool(user_id) }}'` |
+| `'{{ result.get("error") }}'` | `'{{ "error" in result }}'` |
+
+## Available in expressions
+
+### Python builtins
+
+The safe builtins are available: `abs`, `all`, `any`, `bool`, `dict`, `enumerate`, `filter`,
+`float`, `int`, `isinstance`, `len`, `list`, `map`, `max`, `min`, `range`, `reversed`, `round`,
+`set`, `sorted`, `str`, `sum`, `tuple`, `zip`, and the like. `eval`, `exec`, `open`, `compile`,
+`globals`, `type`, `getattr` / `setattr` and the other introspection builtins are removed;
+`__import__` and dunder attributes are rejected outright.
+
+### Helpers
+
+| Name | Description |
+|---|---|
+| `now()` | The current time as a `datetime`. Replay-safe: on the Temporal runtime it is the workflow's deterministic clock |
+| `uuid4()` | A random UUID, also replay-safe |
+| `copy`, `deepcopy` | From the `copy` module |
+| `remap` | `boltons.iterutils.remap`, for transforming nested data |
+| `StringIO` | An in-memory text buffer, for example for `pd.read_csv` |
+
+### Libraries
+
+Pre-imported modules:
+
+| Name | Module |
+|---|---|
+| `np` | NumPy |
+| `pd` | pandas |
+| `pa` | PyArrow |
+| `glom` | glom: call `glom.glom(...)` |
+| `json`, `re`, `base64` | the standard modules |
+| `yaml` | PyYAML: only `safe_load`, `safe_dump` and `dump` |
+| `dt` | the `datetime` module |
+| `rd` | `dateutil.relativedelta` |
+| `bs4` | BeautifulSoup: `bs4.BeautifulSoup(...)` |
+
+Each is exposed through a read-only proxy, so **submodules are not reachable**: `pd.io`, `pd.api`,
+`np.random`, `np.ctypeslib`, `glom.core` and `pa.fs` all raise. Functions that read or write the
+filesystem are either restricted to in-memory buffers (`pd.read_csv(StringIO(...))` is fine,
+`pd.read_csv('/path')` is not) or removed (`pd.read_pickle`, `np.load`).
 
 ```yaml
-# List comprehension
-doubled: "{{ [x * 2 for x in numbers] }}"
-
-# Filter
-positive: "{{ [x for x in numbers if x > 0] }}"
-
-# Map
-names: "{{ [user['name'] for user in users] }}"
-
-# Nested
-result: "{{ [[x*y for x in row] for row in matrix] }}"
+- set:
+    - mean: '{{ float(np.mean([1, 2, 3, 4, 5])) }}'
+    - due: '{{ (now() + dt.timedelta(days=30)).date().isoformat() }}'
+    - next_month: '{{ now() + rd.relativedelta(months=1) }}'
+    - payload: '{{ json.dumps({"id": order_id}) }}'
+    - value: '{{ glom.glom(data, "path.to.nested.value") }}'
 ```
 
-### Dictionary Operations
+## Common patterns
 
 ```yaml
-# Dictionary comprehension
-squared: "{{ {k: v**2 for k, v in data.items()} }}"
+- set:
+    # Conditional values
+    - discount: '{{ price * 0.1 if is_premium else 0 }}'
+    - tier: '{{ "gold" if points > 1000 else "silver" if points > 500 else "bronze" }}'
 
-# Filter dictionary
-filtered: "{{ {k: v for k, v in data.items() if v > 0} }}"
+    # Lists
+    - positive: '{{ [x for x in numbers if x > 0] }}'
+    - names: '{{ [u["name"] for u in users] }}'
 
-# Merge dictionaries
-merged: "{{ {**dict1, **dict2} }}"
+    # Dictionaries
+    - squared: '{{ {k: v ** 2 for k, v in data.items()} }}'
+    - merged: '{{ {**defaults, **overrides} }}'
+
+    # Strings
+    - slug: '{{ title.strip().lower().replace(" ", "-") }}'
+    - formatted: '{{ f"Total: ${total:.2f}" }}'
 ```
 
-### String Operations
+## Best practices
+
+**Keep expressions short; build values step by step.** A `set` is ordered and each entry sees the
+earlier ones. Hold intermediates in task-locals so they never reach the context:
 
 ```yaml
-# String methods
-upper: "{{ text.upper() }}"
-lower: "{{ text.lower() }}"
-stripped: "{{ text.strip() }}"
-replaced: "{{ text.replace('old', 'new') }}"
-
-# String formatting
-formatted: "{{ f'Total: ${total:.2f}' }}"
-
-# String interpolation
-message: "Hello, {{ name }}! You have {{ count }} messages."
+- task_name: price
+  set:
+    - _available: '{{ [i for i in items if i.get("available", True) and i["price"] > 0] }}'
+    - _subtotals: '{{ [i["price"] * i["qty"] * (1 - i.get("discount", 0)) for i in _available] }}'
+    - total: '{{ sum(_subtotals) }}'
 ```
 
-## Best Practices
+**Debug with a trailing `#`** instead of adding tasks to print values.
 
-### Keep Expressions Simple
+**Keep side effects in activities.** Expressions are re-evaluated when a durable workflow replays;
+anything that touches the outside world belongs in an [activity](./activities.md), whose result is
+recorded once. Mutating your own variables (`log.append(...)`) is fine.
+
+**Validate inputs with `raise`:**
 
 ```yaml
-# Good: Simple, readable
-total: "{{ price * quantity }}"
-
-# Bad: Too complex
-result: "{{ sum([item['price'] * item['qty'] * (1 - item.get('discount', 0)) for item in items if item.get('available', True) and item['price'] > 0]) }}"
-
-# Better: Break into steps
-- transform:
-    output_data:
-      - available_items@: "{{ [i for i in items if i.get('available', True) and i['price'] > 0] }}"
-      - subtotals@: "{{ [i['price'] * i['qty'] * (1 - i.get('discount', 0)) for i in available_items] }}"
-      - total: "{{ sum(subtotals) }}"
+- task_name: check-email
+  raise:
+    if: '{{ not email or "@" not in email }}'
+    type: error
+    error_type: ValidationError
+    message: 'Invalid email: {{ email }}'
 ```
 
-### Use Temporary Variables
+## Next steps
 
-```yaml
-# Use @ for intermediate calculations
-- transform:
-    output_data:
-      - base_price@: "{{ item_price * quantity }}"
-      - discount@: "{{ base_price * discount_rate }}"
-      - tax@: "{{ (base_price - discount) * tax_rate }}"
-      - final_price: "{{ base_price - discount + tax }}"
-```
-
-### Debug with `#`
-
-```yaml
-# Log important values during development
-- transform:
-    output_data:
-      - input_data#: "{{ input }}"
-      - processed#: "{{ process(input) }}"
-      - result: "{{ finalize(processed) }}"
-```
-
-### Validate Inputs
-
-```yaml
-# Check for required fields
-- abort:
-    condition: "{{ not email or '@' not in email }}"
-    type: raise
-    message: "Invalid email: {{ email }}"
-```
-
-## Next Steps
-
-- [Activities](./activities.md) - Learn about activity system
-- [Workflowspec Reference](../reference/workflowspec-reference.md) - Complete reference
-- [Writing Workflows](../guides/writing-workflows.md) - Best practices
+- [Activities](./activities.md) — calling the outside world
+- [Workflowspec Reference](../reference/workflowspec-reference.md) — the full DSL reference
+- [Writing Workflows](../guides/writing-workflows.md) — practical patterns

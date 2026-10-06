@@ -8,7 +8,7 @@ One activity, `claude_agent.query`, runs a full Claude Agent SDK loop inside a s
 agent reasons over multiple turns and calls tools autonomously; the activity returns its final
 result.
 
-Use it when a step is open-ended enough that you cannot specify it in advance — "investigate why
+Use it when a task is open-ended enough that you cannot specify it in advance — "investigate why
 this job failed and summarise the cause". For a single prompt-and-response, use
 [`openai.chat.completions`](./openai.md) instead: an agent loop is slower and more expensive.
 
@@ -34,7 +34,7 @@ workflow omits it:
 `claude_agent.query` is the only activity served by the `agent` worker type (task queue `agent`)
 rather than the base worker — the Claude Agent SDK bundles a large native CLI that does not belong
 in the base image. Workflows still run on the base worker and route the activity across
-automatically; nothing in the workflowspec changes. Because it is remote-queued, `execute_locally`
+automatically; nothing in the wfspec changes. Because it is remote-queued, `execute_locally`
 has no effect.
 :::
 
@@ -45,7 +45,7 @@ has no effect.
 An agent run has side effects — tool calls and real spend — so it is never retried. Note the
 consequence: a missed heartbeat is a permanent failure.
 
-Use `timeout_sec` in the input, not the activity timeout, to bound a run: it stops the agent and
+Use `timeout_sec` in the activity's `input`, not `options.retry_policy.timeout_sec`, to bound a run: it stops the agent and
 returns a **partial result**, where exhausting the activity timeout just fails the activity.
 
 ---
@@ -104,14 +104,14 @@ for the prompt.
 
 **Example**
 
-From `moco-examples/claude-agent-demo/src/claude-agent-demo.yaml`:
+Reading the answer and failing the workflow when the agent reports an error:
 
 ```yaml
-- activity:
+- task_name: plan_the_work
+  activity:
     type: claude_agent.query
-    name: plan_the_work
-    input_data:
-      apikey_secret_key: "{{ claude_apikey_secret_key }}"
+    input:
+      apikey_secret_key: '{{ claude_apikey_secret_key }}'
       prompt: |
         Break the following question into at most three concrete lookup steps.
         Answer with a short numbered list and nothing else.
@@ -119,17 +119,27 @@ From `moco-examples/claude-agent-demo/src/claude-agent-demo.yaml`:
         Question: {{ question }}
       max_turns: 2
       effort: low
-    output_name: plan
+  output:
+    set:
+      - plan: '{{ _["result"] }}'
+      - plan_failed: '{{ _["is_error"] }}'
+
+- task_name: check-plan
+  raise:
+    if: '{{ plan_failed }}'
+    type: error
+    error_type: AgentError
+    message: 'agent failed: {{ plan }}'
 ```
 
 With tools granted:
 
 ```yaml
-- activity:
+- task_name: investigate
+  activity:
     type: claude_agent.query
-    name: investigate
-    input_data:
-      apikey_secret_key: "global/ANTHROPIC_API_KEY"
+    input:
+      apikey_secret_key: global/ANTHROPIC_API_KEY
       prompt: |
         Find out what https://api.github.com/zen returns and summarise it.
       capabilities:
@@ -143,10 +153,11 @@ With tools granted:
       timeout_sec: 300
       relay_topic: agent.progress      # optional: stream progress as workflow events
       relay_granularity: turn
-    output_name: investigation
+  output:
+    as: investigation
 ```
 
-A runnable example lives in `moco-examples/claude-agent-demo/`.
+A runnable example lives in `moco-examples-v2/activities/claude-agent-query.yaml`.
 
 ---
 
@@ -217,7 +228,7 @@ name. Naming one that is not installed produces an error listing what is availab
 
 #### What ships by default
 
-The `moco-agent` image prepackages [moco-devkit](https://github.com/moco/moco/tree/main/moco-devkit)
+The `moco-agent` image prepackages [moco-devkit](https://github.com/moco-workflow/moco/tree/main/moco-devkit)
 at `/moco/plugins`, so an agent can be pointed at Moco workflow authoring without any operator
 setup:
 
@@ -275,6 +286,32 @@ the *workflow* needs to react to progress.
 Each relayed event is a Temporal signal and therefore a workflow-history entry, and the engine
 retains at most 1000 unmatched events per topic — a 200-tool-call run at `message` granularity is
 200 signals. Relayed text is capped at 8000 characters, and a relay failure never fails the run.
+
+To keep the workflow responsive while the agent works, start the activity with
+`options.async_mode: true` and wait for the relayed result:
+
+```yaml
+- task_name: start-agent
+  activity:
+    type: claude_agent.query
+    input:
+      apikey_secret_key: global/ANTHROPIC_API_KEY
+      prompt: '{{ task_description }}'
+      relay_topic: agent.progress
+      relay_event_type: agent_result
+      relay_granularity: result
+    options:
+      async_mode: true            # do not block; `_` is a token, not the result
+
+- task_name: wait-for-agent
+  wait_for:
+    event:
+      topic: agent.progress
+      event_type: agent_result
+    timeout_sec: 3600
+  output:
+    as: agent_event               # the event mapping, or null on timeout
+```
 
 **Debug progress** goes to the client: session init, each turn, every tool call and its outcome,
 refused tools, subagent tasks and a final summary, printed live by the `moco` CLI. It costs no
