@@ -390,7 +390,7 @@ And `permanent: true` cannot be undone. Prefer the default trash behaviour unles
 ---
 
 A complete runnable example — create a folder, upload a file, list it, download it back and clean
-up — lives in `moco-examples-v2/activities/gdrive.yaml`.
+up — lives in `moco-examples/activities/gdrive.yaml`.
 
 To index Drive documents for retrieval, see
 [`llama_index.index_gdrive`](./llama-index.md#llama_indexindex_gdrive), which reuses the same

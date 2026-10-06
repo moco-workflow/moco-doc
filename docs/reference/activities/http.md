@@ -147,7 +147,7 @@ A non-2xx response is data unless `raise_for_status` is set, so branch on `is_su
 ```
 
 More request shapes (form body, bearer token, 404 as data) are in
-`moco-examples-v2/activities/http-request.yaml`.
+`moco-examples/activities/http-request.yaml`.
 
 ## Authentication
 

@@ -521,7 +521,7 @@ embedding one, since the two usually share a gateway):
 ```
 
 A complete runnable example, contrasting both query modes over the same question, lives in
-`moco-examples-v2/activities/llama-index.yaml`.
+`moco-examples/activities/llama-index.yaml`.
 
 ---
 

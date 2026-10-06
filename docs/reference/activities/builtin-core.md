@@ -235,7 +235,7 @@ main:
 ```
 
 A complete example, including a spec chosen at runtime, is in
-`moco-examples-v2/activities/builtin-execute-workflow.yaml`.
+`moco-examples/activities/builtin-execute-workflow.yaml`.
 
 :::note What the embedded workflow can call
 It sees the activities of the worker it runs on. On the base worker that is the core provider set;

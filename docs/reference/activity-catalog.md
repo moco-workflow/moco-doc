@@ -45,7 +45,7 @@ cover only what is specific to an activity:
 - **Description** — what it does and when to reach for it.
 - **Input** — the fields of `activity.input`, with types, defaults and which are required.
 - **Output** — the shape of the result, which the task sees as `_` in its `output`.
-- **Examples** — real YAML, drawn from `moco-examples-v2/` wherever an example exists.
+- **Examples** — real YAML, drawn from `moco-examples/` wherever an example exists.
 
 ## Conventions across providers
 

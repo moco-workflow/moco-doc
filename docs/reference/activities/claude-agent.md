@@ -157,7 +157,7 @@ With tools granted:
     as: investigation
 ```
 
-A runnable example lives in `moco-examples-v2/activities/claude-agent-query.yaml`.
+A runnable example lives in `moco-examples/activities/claude-agent-query.yaml`.
 
 ---
 
