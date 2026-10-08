@@ -38,7 +38,7 @@ context:
     table_name: "product_docs"                          # physical table is data_product_docs
   embed_model_info:
     apikey_secret_key: "MY_LLM_TOKEN"
-    base_url: "https://my-gateway/v1"       # or MOCO_LLM_DEFAULT_BASE_URL
+    base_url: "https://my-gateway/v1"       # or MOCO_LLM_DEFAULT_EMBED_MODEL_BASE_URL, then MOCO_LLM_DEFAULT_BASE_URL
     model_name: "text-embedding-3-small"    # or MOCO_LLM_DEFAULT_EMBED_MODEL_NAME
     embed_dim: 1536                         # must match the model and the existing table
 ```
@@ -56,7 +56,7 @@ context:
 | Field | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
 | `apikey_secret_key` | str | yes | — | Secret name holding the embedding API key |
-| `base_url` | str | no | `MOCO_LLM_DEFAULT_BASE_URL` | OpenAI-compatible endpoint, version path included |
+| `base_url` | str | no | `MOCO_LLM_DEFAULT_EMBED_MODEL_BASE_URL`, then `MOCO_LLM_DEFAULT_BASE_URL` | OpenAI-compatible endpoint, version path included |
 | `model_name` | str | no | `MOCO_LLM_DEFAULT_EMBED_MODEL_NAME` | Embedding model |
 | `embed_dim` | int | no | `1536` | Vector dimension; must match the model and the existing table |
 
@@ -80,7 +80,7 @@ That is `https://my-gateway/v1` for most gateways, `http://localhost:11434/v1` f
 
 | Variable | Used by |
 | --- | --- |
-| `MOCO_LLM_DEFAULT_BASE_URL`, `MOCO_LLM_DEFAULT_MODEL_NAME`, `MOCO_LLM_DEFAULT_EMBED_MODEL_NAME` | Model defaults |
+| `MOCO_LLM_DEFAULT_BASE_URL`, `MOCO_LLM_DEFAULT_MODEL_NAME`, `MOCO_LLM_DEFAULT_EMBED_MODEL_BASE_URL`, `MOCO_LLM_DEFAULT_EMBED_MODEL_NAME` | Model defaults |
 | `MOCO_RAG_FILE_DIR` | Root for `index_files`; a path escaping it is rejected |
 | `MOCO_HTTP_PROXY` | The `download` and `readability` web loaders |
 | `MOCO_CHROME_DRIVER_PATH`, `MOCO_CHROME_PATH` | The `whole_site` crawler only |

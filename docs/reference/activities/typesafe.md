@@ -26,8 +26,8 @@ Connection settings come from the activity input or, when omitted, from the work
 
 | Input field | Environment variable | Fallback |
 | --- | --- | --- |
-| `base_url` | `TYPESAFE_BASE_URL` | `https://api.typesafe.ai` |
-| `apikey_secret_key` | `TYPESAFE_API_KEY` (the key itself) | a placeholder key |
+| `base_url` | `TYPESAFE_DEFAULT_BASE_URL` | `https://api.typesafe.ai` |
+| `apikey_secret_key` | `TYPESAFE_DEFAULT_API_KEY` (the key itself) | a placeholder key |
 | `model` | `TYPESAFE_DEFAULT_MODEL` | `jev-latest` |
 
 `apikey_secret_key` names a stored secret, as elsewhere — see
@@ -38,13 +38,13 @@ Connection settings come from the activity input or, when omitted, from the work
 Point the worker at the server and leave the key unset:
 
 ```bash
-TYPESAFE_BASE_URL=http://localhost:8001
+TYPESAFE_DEFAULT_BASE_URL=http://localhost:8001
 ```
 
 `laya-serve` checks an API key only when it was started with `LAYA_API_KEY`. The SDK refuses to run
 without *some* key, so when none is configured the activity sends a placeholder. If you set
 `LAYA_API_KEY` on the server, store the same value as a secret and pass its name in
-`apikey_secret_key`, or set `TYPESAFE_API_KEY` on the worker.
+`apikey_secret_key`, or set `TYPESAFE_DEFAULT_API_KEY` on the worker.
 
 Two things differ from the hosted API:
 
@@ -75,8 +75,8 @@ retried.
 | `state` | str \| dict \| list | yes | — | The text or JSON to evaluate |
 | `questions` | dict[str, [Question](#question)] | yes | — | Questions keyed by the name their answer is returned under; at least one |
 | `model` | str | no | `TYPESAFE_DEFAULT_MODEL` | Model name |
-| `base_url` | str | no | `TYPESAFE_BASE_URL` | API root, without `/v1/systemone` |
-| `apikey_secret_key` | str | no | `TYPESAFE_API_KEY` | Name of a secret holding the API key |
+| `base_url` | str | no | `TYPESAFE_DEFAULT_BASE_URL` | API root, without `/v1/systemone` |
+| `apikey_secret_key` | str | no | `TYPESAFE_DEFAULT_API_KEY` | Name of a secret holding the API key |
 | `extra_body` | dict | no | `null` | Extra top-level request-body fields, merged over the request body |
 
 #### Question
