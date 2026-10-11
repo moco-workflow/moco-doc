@@ -53,6 +53,23 @@ Two things differ from the hosted API:
   `typed-decisions`. Any other value, including the default `jev-latest`, lets Laya choose the
   checkpoint from the text's language. The response's `raw.routing` shows what it picked.
 
+### Using moco-systemone
+
+`moco-systemone` is a small server that ships with Moco. It implements the same protocol on top of
+a local [Ollama](https://ollama.com) model, `qwen3:0.6b` by default. Start it on port 8002 and
+point the worker at it:
+
+```bash
+TYPESAFE_DEFAULT_BASE_URL=http://localhost:8002
+```
+
+- `instructions` is optional. A question without it gets a generic prompt for its type.
+- `model` picks a model alias configured on the server. Any other name, including the default
+  `jev-latest`, uses the server's default model.
+- Answers come from a small model and are coarser than the hosted API's. `choice` and `score`
+  questions work best with short, distinct labels and rubric entries, such as `calm`,
+  `frustrated` and `angry`.
+
 ## Defaults
 
 | Activity | Timeout | Max attempts |
