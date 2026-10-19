@@ -304,6 +304,7 @@ output:                                  # shared key
 | Primitive | [`raise`](./statements.md#raise) | Fails, or stops early with a control signal |
 | Primitive | [`emit_event`](./statements.md#emit_event) | Publishes an event |
 | Primitive | [`wait_for`](./statements.md#wait_for) | Waits for an event, or sleeps |
+| Primitive | [`request`](./statements.md#request) | Asks another workflow and waits for its reply |
 | Primitive | [`checkpoint`](./statements.md#checkpoint) | Restarts the run with its state saved (continue-as-new) |
 | Primitive | [`state_machine`](./statements.md#state_machine) | Runs an event-driven state machine |
 | Primitive | [`rules_engine`](./statements.md#rules_engine) | Evaluates rules over a set of facts |
@@ -1089,11 +1090,13 @@ The `error_type` an `on_error` handler sees is one of:
 | `NameError` | An expression read a name that is not defined |
 | the activity's own type | An activity failed after its retries, for example `ValueError` for an invalid input |
 | the child's error type | A child workflow or function failed; its error propagates with its own type |
+| `RequestTimeoutError` | A `request` got no reply within its `timeout_sec` |
+| `ReplyError` | An `emit_event` `reply_to` was given something that is not a request event |
 
 `AbortError` is the conventional type for "stop this run as aborted":
 `raise: {type: error, error_type: AbortError, message: ...}`.
 
-A `wait_for` timeout is **not** an error: its result is `null`.
+A `wait_for` timeout is **not** an error: its result is `null`. A `request` timeout is.
 
 ---
 
@@ -1142,6 +1145,63 @@ main:
         backoff_coefficient: 2.0
         non_retryable_error_types: [ValueError]
 ```
+
+### Computed retry policies
+
+Every field except `non_retryable_error_types` takes either a number or a `{{ }}` expression,
+and an expression must evaluate to a number. This holds wherever a policy is written:
+`header.metadata.default_activity_retry_policy`, an activity's `options.retry_policy`, and a child
+workflow's `options.retry_policy`. `non_retryable_error_types` is always a literal list.
+
+Expressions are evaluated each time the task runs, in that task's scope, so they can read inputs,
+context variables, container-scoped variables and loop variables. The header default is merged
+into each activity's policy first and then evaluated in that activity's scope, so it should only
+use names that exist everywhere, such as inputs and context variables.
+
+```yaml
+header:
+  schema_version: 2.0.0
+  workflow_name: computed-retry-policy-example
+  metadata:
+    default_activity_retry_policy:
+      max_attempts: '{{ 3 if environment == "prod" else 1 }}'   # fail fast outside prod
+      timeout_sec: 60
+
+input:
+  environment: prod
+  max_retries: 4
+  files: [{name: a.csv, size_mb: 1}, {name: b.csv, size_mb: 40}]
+
+main:
+  tasks:
+    - task_name: upload
+      activity:
+        type: builtin.delay
+        input:
+          duration: 1s
+        options:
+          retry_policy:
+            max_attempts: '{{ max_retries + 1 }}'    # literals and expressions mix
+            backoff_coefficient: 2.0
+
+    - task_name: process-files
+      loop:
+        in: '{{ files }}'
+        foreach: file
+        do:
+          activity:
+            type: builtin.delay
+            input:
+              duration: 1s
+            options:
+              retry_policy:
+                timeout_sec: '{{ 10 + file["size_mb"] * 3 }}'   # one timeout per item
+```
+
+A `retry_policy` passed when the run is started (through the API or the CLI) is not part of the
+spec and is never evaluated, so it takes plain numbers only. See
+`moco-examples/basics/26-retry-policy.yaml` for a runnable version that also sets a `sync`
+child's policy.
 
 ---
 
@@ -1308,7 +1368,7 @@ output    := set?: [ {target: value}, ... ], data?: value, as?: target
 on_error  := catch?: bool, do?: task
 
 kind      := activity | workflow | set | raise | emit_event | wait_for | checkpoint
-           | state_machine | rules_engine | tasks | loop | switch | branches
+           | state_machine | rules_engine | tasks | loop | switch | branches | request
 
 tasks     := tasks: [task, ...]                     (props.execute_mode / join_type)
 loop      := loop: {in, foreach?, index?, execute_mode?, join_type?, do: task}

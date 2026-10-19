@@ -363,6 +363,24 @@ A `workflow` task can carry `options`, applying to that child only:
 | `enable_otel_trace` | Emit OpenTelemetry spans |
 | `entity_workflow_args` | Entity-workflow configuration |
 
+Every `retry_policy` field except `non_retryable_error_types` may be an expression, evaluated when
+the task runs, so a child's timeout or attempt count can depend on the parent's data:
+
+```yaml
+- task_name: build-report
+  workflow:
+    ref: build-report
+    mode: sync
+    input:
+      rows: "{{ rows }}"
+    options:
+      retry_policy:
+        timeout_sec: "{{ 60 + len(rows) // 100 }}"     # scale with the input
+        max_attempts: "{{ 1 if dry_run else 3 }}"
+  output:
+    as: report
+```
+
 The engine derives the child's `workflow_id`, `tier` and `trace_id` from the parent, so they are not
 options. `trace_id` in particular is inherited: parent and every descendant share one trace, so a
 whole tree is greppable by a single ID.

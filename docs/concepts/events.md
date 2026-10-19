@@ -5,7 +5,7 @@ sidebar_position: 4
 
 # Events
 
-Moco supports event-driven workflows through two complementary tasks: `emit_event` (send) and `wait_for` (receive). Events enable coordination between concurrent workflows, signal state machine transitions, and implement multi-agent patterns.
+Moco supports event-driven workflows through two complementary tasks: `emit_event` (send) and `wait_for` (receive), plus `request`, which sends and waits for the reply in one task. Events enable coordination between concurrent workflows, signal state machine transitions, and implement multi-agent patterns.
 
 For full workflowspec context, see the [Workflowspec Reference](../reference/workflowspec-reference.md).
 
@@ -203,12 +203,75 @@ Omit `event` to use `wait_for` as a simple durable sleep:
 
 ### Ordering
 
-A workflow starts listening on a topic when its first `wait_for` on that topic begins. An event
-published to the workflow before then can be dropped, so start the producer first and keep the gap
-small — or have the producer wait a moment before emitting.
+A `wait_for` whose `topic` is written out literally is listening from the moment the workflow
+starts. An event that arrives before the `wait_for` is reached is kept and handed to it, so the
+producer can be started before or after the consumer.
 
-Once the workflow is listening, an event that the current waiter does not match is kept for later
-`wait_for` tasks on the same topic. Waiters can therefore pick events out in any order.
+A topic computed by an expression (`topic: "{{ ... }}"`) is only known at runtime, so the workflow
+starts listening on it at its first `wait_for`. An event published before then can be dropped; start
+the producer after that, or have it wait a moment before emitting. From then on the workflow keeps
+listening, so nothing between later waits is lost.
+
+An event that no current waiter matches is kept for later `wait_for` tasks on the same topic.
+Waiters can therefore pick events out in any order.
+
+---
+
+## Request / Reply
+
+When one workflow needs an answer from another, use `request`. It sends the event and waits for the
+reply in one task:
+
+```yaml
+- task_name: get-quote
+  request:
+    target_workflow_id: "{{ pricing_id }}"   # required
+    topic: pricing                           # default "default"
+    event_type: get_quote
+    data:
+      sku: "{{ sku }}"
+    timeout_sec: 30
+  output:
+    data: "{{ _['data'] }}"                  # _ is the reply event
+    as: quote
+  on_error:
+    catch: true
+    do:
+      set:
+        - quote: null
+```
+
+The receiver, often a state machine, answers with `emit_event` and `reply_to`, passing the request
+event it received:
+
+```yaml
+trigger:
+  event_type: get_quote
+  action:
+    emit_event:
+      reply_to: "{{ event }}"                # the request event, or its metadata
+      event_type: quote
+      data:
+        price: 12
+```
+
+How it works:
+
+- **Correlation is automatic.** `request` adds a unique `correlation_id`, its own workflow id
+  (`reply_to`) and the reply topic (`reply_topic`, default `moco.reply`) to the request's
+  `metadata`. `reply_to` reads them back to address the reply. The requester waits for that
+  correlation id alone, so several requests can be in flight at once, a parallel loop for example,
+  and each gets its own reply in any order. You do not need a `match_expression`.
+- **A missing reply is an error.** Unlike `wait_for`, which gives `null` on timeout, a `request`
+  with no reply within `timeout_sec` raises `RequestTimeoutError`. Catch it with `on_error`. A
+  request without `timeout_sec` waits forever, and the validator warns about it.
+- **`reply_to` does the routing.** It cannot be combined with `target_workflow_id`, `topic` or
+  `entity_workflow`. Passing something that is not a request event raises `ReplyError`.
+- **Late replies are dropped.** A reply that arrives after its request timed out is discarded.
+- The receiver must be running to get the request. To start it on demand, make it an
+  [entity workflow](#starting-an-entity-workflow-signal-with-start).
+
+See `moco-examples/basics/25-request-reply.yaml` for a runnable example.
 
 ---
 
@@ -460,9 +523,9 @@ main:
 
 Each reply carries the agent's id in `data`, so the parent's `match_expression` takes each reply
 exactly once, whatever order the children finish in: a reply that arrives while the parent is
-waiting for a different agent is kept for that agent's `wait_for`. Replies sent before the parent's
-first `wait_for` on `child_events` begins can be dropped (see [Ordering](#ordering)), so children
-that may finish very quickly should wait briefly before replying.
+waiting for a different agent is kept for that agent's `wait_for`. Because `child_events` is a
+literal topic, a reply sent before the parent's first `wait_for` begins is kept too (see
+[Ordering](#ordering)).
 
 ---
 
@@ -470,5 +533,5 @@ that may finish very quickly should wait briefly before replying.
 
 - [State Machines](./state-machines.md) — event-driven FSM patterns
 - [Composing Workflows](./child-workflows.md) — `async` children and how they report back
-- [Tasks Reference](../reference/statements.md) — full `emit_event` and `wait_for` parameter reference
+- [Tasks Reference](../reference/statements.md) — full `emit_event`, `wait_for` and `request` parameter reference
 - [Workflowspec Reference](../reference/workflowspec-reference.md) — complete technical reference

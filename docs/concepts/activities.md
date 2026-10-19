@@ -318,6 +318,43 @@ main:
 | `maximum_interval_sec` | Upper bound on the wait between retries |
 | `non_retryable_error_types` | Error types that fail immediately, without retrying |
 
+Every field except `non_retryable_error_types` may also be an expression that evaluates to a
+number. It is evaluated each time the task runs, in the task's scope, so a policy can follow the
+input, the environment, or the item a loop is on:
+
+```yaml
+header:
+  schema_version: 2.0.0
+  workflow_name: sized-uploads
+  metadata:
+    default_activity_retry_policy:
+      max_attempts: '{{ 3 if environment == "prod" else 1 }}'   # fail fast outside prod
+      timeout_sec: 60
+
+input:
+  environment: prod
+  files: [{name: a.csv, size_mb: 1}, {name: b.csv, size_mb: 40}]
+
+main:
+  task_name: upload-files
+  loop:
+    in: '{{ files }}'
+    foreach: file
+    do:
+      activity:
+        type: http.request
+        input:
+          method: PUT
+          url: 'https://storage.example.com/{{ file["name"] }}'
+        options:
+          retry_policy:
+            timeout_sec: '{{ 10 + file["size_mb"] * 3 }}'      # bigger file, longer timeout
+```
+
+The header default is evaluated in the scope of each activity that uses it, so keep it to names
+every activity can see, such as inputs and context variables. See
+[Computed retry policies](../reference/workflowspec-reference.md#computed-retry-policies).
+
 Retry behavior:
 - Initial attempt + retries = total attempts
 - Exponential backoff between retries

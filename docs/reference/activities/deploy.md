@@ -127,7 +127,8 @@ A package is one **semantic version** of a wfspec, holding the YAML files that m
 | `builtin.deploy.package.create_with_files` | Create a package **and** its files atomically | `wfspec_name`, `files` | `package_id`, version fields, `manifest`, `created_by` |
 | `builtin.deploy.package.get` | Fetch a package by id, or by wfspec + version | — | `package_id`, `wfspec_name`, version fields |
 | `builtin.deploy.package.list` | List every version of a wfspec | `wfspec_name` | — |
-| `builtin.deploy.package.get_files` | List a package's files | `package_id` | — |
+| `builtin.deploy.package.get_files` | A package's files, with their content | `package_id` | — |
+| `builtin.deploy.package.list_files` | List a package's files without their content: `filename` and `workflow_name` | `package_id` | — |
 | `builtin.deploy.package.delete` | Delete a package | `package_id` | — |
 | `builtin.deploy.package.file.set` | Add or update one file (idempotent by package + filename) | `package_id`, `file_order`, `filename`, `content` | `file_id`, `input_schema`, `output_schema` |
 | `builtin.deploy.package.file.get` | Fetch one file by name | `package_id`, `filename` | — |
@@ -144,6 +145,19 @@ other files are child workflows the entry point refers to by name. This is the s
 | `wfspec_package_version` (`major.minor.patch`) | `version_major`, `version_minor`, `version_patch` |
 | `wfspec_description`, `manifest` | `manifest` (`{description, ...}`) |
 | files matched by `sources`, entry point first | `files[]` with `file_order` 0, 1, … |
+
+Moco records each file's `workflow_name` when the file is written: its `header.workflow_name`, or
+`null` for a file that is not a wfspec. Use `list_files` to see which workflows a package
+contains without fetching their YAML:
+
+```yaml
+- activity:
+    type: builtin.deploy.package.list_files
+    input:
+      package_id: '{{ package_id }}'
+  output:
+    as: files   # -> [{id, package_id, file_order, filename, workflow_name, created_at}, ...]
+```
 
 **Example** — publish version 1.2.0 of `daily-summary` with its files in one call. The wfspec
 being published is held with the `#literal` modifier so that its own `{{ }}` expressions are
@@ -298,7 +312,7 @@ version resolution.
 | --- | --- | --- | --- |
 | `builtin.deploy.query.get_latest_package` | Latest package version of a wfspec | `namespace_id`, `wfspec_name` | — |
 | `builtin.deploy.query.get_wfspec_versions` | Every package version of a wfspec | `wfspec_name` | — |
-| `builtin.deploy.query.get_targeted_wfspec_version` | The version a given user resolves to in a stage | `wfspec_name`, `user_id`, `stage_id` | `version_filter` |
+| `builtin.deploy.query.get_targeted_wfspec_version` | The version a given user resolves to in a stage | `wfspec_name`, `user_id`, `stage_id` | `version_filter`, `exclude_files` |
 | `builtin.deploy.query.get_user_deployments` | Active deployments a user can see in a stage | `user_id`, `stage_id` | — |
 | `builtin.deploy.query.is_user_targeted` | Whether a deployment targets a user — returns `{is_targeted: bool}` | `user_id`, `deployment_id` | — |
 | `builtin.deploy.query.get_group_members` | Group members, resolved recursively — returns `{user_ids: [...]}` | `group_id` | — |
@@ -316,6 +330,9 @@ version resolution.
   output:
     as: resolved     # -> the package record, or null
 ```
+
+Set `exclude_files: true` when you only need the version and metadata. The result then has no
+`files` key, and the package files are not read at all.
 
 ---
 

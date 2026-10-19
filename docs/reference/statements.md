@@ -23,6 +23,7 @@ task can call, see the [Activity Catalog](./activity-catalog.md).
 | [`raise`](#raise) | primitive | `null` when its `if` is false; otherwise it does not complete |
 | [`emit_event`](#emit_event) | primitive | `null` |
 | [`wait_for`](#wait_for) | primitive | The event, or `null` on timeout |
+| [`request`](#request) | primitive | The reply event; `RequestTimeoutError` when none arrives |
 | [`checkpoint`](#checkpoint) | primitive | `null` |
 | [`state_machine`](#state_machine) | primitive | The name of the terminal state reached |
 | [`rules_engine`](#rules_engine) | primitive | The derived facts |
@@ -84,7 +85,7 @@ activity:
 |---|---|
 | `type` | Activity type, such as `http.request` (required). See the [Activity Catalog](./activity-catalog.md) |
 | `input` | The activity's input fields. Evaluated each time the task runs |
-| `options.retry_policy` | Timeouts and retries, laid over the header's `default_activity_retry_policy`. See [Retry policy](./workflowspec-reference.md#retry-policy) |
+| `options.retry_policy` | Timeouts and retries, laid over the header's `default_activity_retry_policy`. Field values may be expressions, evaluated each time the task runs. See [Retry policy](./workflowspec-reference.md#retry-policy) |
 | `options.execute_locally` | Run the activity in the workflow's own process. Overrides the activity's default only when set |
 | `options.enable_cache` | Cache the activity's result |
 | `options.cache_policy` | `expire_in_seconds` (cache lifetime), `disable` |
@@ -192,7 +193,7 @@ workflow:
 | `contents_yaml` | The same as YAML text (a string or a list of strings), for example built or chosen at runtime |
 | `mode` | How the child runs. Default `inline` |
 | `input` | The child's input. The child's context is built from it, as for a top-level run |
-| `options.retry_policy` | Timeouts and retries of a `sync` child |
+| `options.retry_policy` | Timeouts and retries of a `sync` child. Field values may be expressions. See [Retry policy](./workflowspec-reference.md#computed-retry-policies) |
 | `options.debug_mode`, `options.debug_info` | Run the child in debug mode, with optional debug data |
 | `options.enable_otel_trace` | Emit OpenTelemetry traces for the child |
 | `options.execute_mode` | How the child is dispatched: `workflow` (default; each activity dispatched separately), `standalone-activity` (the whole child runs as one activity, efficient for large-data or CPU-bound work), or `in-memory` |
@@ -436,6 +437,7 @@ emit_event:
     ref | contents | contents_yaml: ...
     mode: async | detached
     input: <mapping>
+  reply_to: <request event>
 ```
 
 | Field | Description |
@@ -447,6 +449,7 @@ emit_event:
 | `target_workflow_id` | The workflow that receives the event. Default: this workflow |
 | `suppress_error` | `true`: if delivery fails, log it and carry on instead of failing |
 | `entity_workflow` | Start the target workflow if it is not running, then deliver (signal-with-start). Takes a source (`ref`, `contents` or `contents_yaml`), a `mode` and an `input`, as in [`workflow`](#workflow) |
+| `reply_to` | Answer a [`request`](#request): the request event (`event` in a transition, `_` after a `wait_for`) or its `metadata`. The event goes back to the requester on its reply topic, carrying its correlation id. Cannot be combined with `target_workflow_id`, `topic` or `entity_workflow`; a value that is not a request event raises `ReplyError` |
 
 **Result `_`:** `null`.
 
@@ -497,8 +500,8 @@ wait_for:
 | `timeout_sec` | How long to wait. Required when there is no `event` |
 
 - An event is consumed by the **first** waiter it matches; a second `wait_for` will not see it.
-- A `wait_for` only sees events that arrive after it starts waiting. Start the producer first, and
-  keep the gap short.
+- With a literal `event.topic`, an event that arrives before the `wait_for` is reached is kept for
+  it. An expression topic is only listened to from its first `wait_for` on.
 - Without `event`, `wait_for` is a durable sleep of `timeout_sec`.
 
 **Result `_`:** the matched event, a mapping with `topic`, `event_type`, `data`, `metadata`
@@ -533,6 +536,73 @@ main:
       wait_for:
         timeout_sec: 1
 ```
+
+---
+
+### request
+
+Sends an event to another workflow and waits for its reply.
+
+```text
+request:
+  target_workflow_id: <workflow id>
+  topic: <topic>
+  event_type: <name>
+  data: <any>
+  metadata: <any>
+  reply_topic: <topic>
+  timeout_sec: <seconds>
+```
+
+| Field | Description |
+|---|---|
+| `target_workflow_id` | The workflow to ask. Required |
+| `topic` | The topic the request is sent on. Default `default` |
+| `event_type` | The request's name within the topic |
+| `data` | The payload |
+| `metadata` | Extra information. `correlation_id`, `reply_to` and `reply_topic` are added to it |
+| `reply_topic` | The topic the reply is awaited on. Default `moco.reply` |
+| `timeout_sec` | How long to wait for the reply. Without it the request waits forever (validator warning) |
+
+- The reply is matched by the correlation id the engine adds, so no `match_expression` is needed
+  and concurrent requests each get their own reply.
+- The receiver answers with [`emit_event`](#emit_event) and `reply_to`.
+
+**Result `_`:** the reply event, a mapping with `topic`, `event_type`, `data`, `metadata` and
+more. With no reply within `timeout_sec` the task raises `RequestTimeoutError`; catch it with
+`on_error`.
+
+```yaml
+header:
+  schema_version: 2.0.0
+  workflow_name: request-task
+
+input:
+  pricing_id:
+  sku: A-1
+
+output: '{{ quote }}'
+
+main:
+  task_name: get-quote
+  request:
+    target_workflow_id: '{{ pricing_id }}'
+    topic: pricing
+    event_type: get_quote
+    data:
+      sku: '{{ sku }}'
+    timeout_sec: 30
+  output:
+    data: '{{ _["data"] }}'
+    as: quote
+  on_error:
+    catch: true
+    do:
+      set:
+        - quote: null
+```
+
+See [Request / Reply](../concepts/events.md#request--reply) for the whole exchange.
 
 ---
 

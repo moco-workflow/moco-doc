@@ -4,10 +4,11 @@ sidebar_label: MCP
 
 # MCP Activities
 
-One activity, `mcp.call_tool`, invokes a tool on a remote [Model Context
-Protocol](https://modelcontextprotocol.io) server and returns its result. Progress notifications
-the tool emits along the way are relayed into the workflow as events, so a long tool call can be
-followed while it runs.
+Two activities talk to a remote [Model Context Protocol](https://modelcontextprotocol.io) server.
+`mcp.call_tool` invokes a tool and returns its result; progress notifications the tool emits along
+the way are relayed into the workflow as events, so a long tool call can be followed while it runs.
+`mcp.list_tools` returns the tools the server exposes, with hashes that make a changed tool easy to
+spot.
 
 This is the outbound direction — a moco workflow calling someone else's MCP tool. Moco also
 *serves* MCP (`moco-server` exposes `execute_workflow` as a tool); that is a separate thing, covered
@@ -15,11 +16,16 @@ in [Running workflows through the API](../../guides/run-moco-workflow-through-ap
 
 ## Setup
 
-No configuration and no secret-store integration: authentication is a bearer token or API key in
-`headers`.
+No configuration. For a bearer token, fetch it with
+[`builtin.secret.get`](./secret.md#builtinsecretget), which returns it **still encrypted**, and pass
+the blob to `encrypted_auth_token`: the activity decrypts it internally and sends
+`Authorization: Bearer <token>`, so the plaintext never enters workflow context. This works the
+same for a static API key stored as a secret and for a token a workflow obtained at run time and
+stored the same way. See [Authentication](#authentication) below.
 
 :::caution Tokens in `headers` are visible
-They pass through workflow context and history in plaintext.
+Anything you put in `headers` passes through workflow context and history in plaintext. Use
+`encrypted_auth_token` for bearer credentials.
 :::
 
 Only the **streamable-http** transport is supported; stdio servers cannot be reached. The worker
@@ -27,8 +33,12 @@ needs the `mcp` package.
 
 ## Defaults
 
-86400 s (1 day) timeout, 1 attempt, heartbeating every 20 s against a 60 s timeout. The activity
-ends when the tool call completes, so the one-day timeout is a ceiling rather than a duration.
+`mcp.call_tool`: 86400 s (1 day) timeout, 1 attempt, heartbeating every 20 s against a 60 s
+timeout. The activity ends when the tool call completes, so the one-day timeout is a ceiling rather
+than a duration.
+
+`mcp.list_tools`: 60 s timeout, 3 attempts, no heartbeat. Listing is read-only, so a retry is
+safe.
 
 ---
 
@@ -45,6 +55,7 @@ Opens a session, initializes it, calls one tool, and returns the result. Each
 | `tool_name` | str | yes | — | Name of the tool to call |
 | `arguments` | dict | no | `null` | Arguments passed to the tool |
 | `headers` | dict[str, str] | no | `null` | HTTP headers for the connection |
+| `encrypted_auth_token` | [EncryptedData](./http.md#encrypteddata) | no | `null` | Encrypted bearer token, decrypted inside the activity and sent as `Authorization: Bearer <token>`; overrides an `Authorization` key in `headers` |
 | `relay_topic` | str | no | `"default"` | Event topic progress is relayed on |
 | `relay_event_type` | str | no | `null` | `event_type` stamped on each relayed event |
 | `target_workflow_id` | str | no | current workflow | Workflow the events are delivered to |
@@ -73,8 +84,7 @@ Called synchronously, for the result only — the common case:
       tool_name: "summarize_document"
       arguments:
         document_id: "{{ doc_id }}"
-      headers:
-        Authorization: "Bearer {{ mcp_token }}"
+      encrypted_auth_token: "{{ mcp_token }}"    # output of builtin.secret.get
     options:
       retry_policy:
         timeout_sec: 600
@@ -110,8 +120,97 @@ Started asynchronously so the workflow can react to progress:
     as: call_token
 ```
 
+---
+
+## `mcp.list_tools`
+
+Opens a session, initializes it, and lists every tool the server exposes, following pagination.
+Use it to discover what a server offers, or to check on a schedule that a server's tools have not
+changed since you last reviewed them.
+
+**Input**
+
+| Field | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `endpoint` | str | yes | — | Streamable-http MCP endpoint URL |
+| `headers` | dict[str, str] | no | `null` | HTTP headers for the connection |
+| `encrypted_auth_token` | [EncryptedData](./http.md#encrypteddata) | no | `null` | Encrypted bearer token, as for `mcp.call_tool` |
+| `include` | list[str] | no | `null` (all) | Return only the tools with these names; names the server lacks are ignored |
+
+**Output**
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `server` | object | `name`, `version` and `protocol_version` the server reported at initialization |
+| `tools` | list | One entry per tool, sorted by `name`: `name`, `title`, `description`, `input_schema`, `output_schema`, `annotations`, `hash` |
+| `hash` | str | Hash of the whole listing (every returned tool's name and `hash`) |
+
+A tool's `hash` is a SHA-256 over its `name`, `description`, `input_schema` and `output_schema`,
+independent of key order. It changes when any of those change and is unaffected by `title` and
+`annotations`. The top-level `hash` also changes when a tool is added or removed. With `include`,
+both cover only the returned tools.
+
+The description is part of the hash on purpose: it is text a model reads, so a server that quietly
+changes it can change what an agent does. Store the hashes you reviewed and treat a mismatch as
+something to look at, not something to accept automatically.
+
+**Example**
+
+```yaml
+- task_name: list-remote-tools
+  activity:
+    type: mcp.list_tools
+    input:
+      endpoint: "https://tools.example.com/mcp"
+      encrypted_auth_token: "{{ mcp_token }}"    # output of builtin.secret.get
+      include: ["search", "get_issue"]
+  output:
+    as: listing     # -> server, tools, hash
+
+- task_name: check-drift
+  raise:
+    if: "{{ listing['hash'] != reviewed_hash }}"
+    type: error
+    message: "MCP tools changed since review: {{ [t['name'] for t in listing['tools']] }}"
+```
+
+:::note Errors raise
+Unlike `mcp.call_tool`, a connection or protocol failure fails the activity. An empty `tools` list
+always means the server has no (matching) tools, never that it could not be reached.
+:::
+
+## Authentication
+
+Both activities authenticate the same way. The example uses `mcp.call_tool`.
+
+```yaml
+- task_name: get-token
+  activity:
+    type: builtin.secret.get
+    input:
+      secret_name: TOOLS_MCP_TOKEN
+  output:
+    as: mcp_token
+
+- task_name: run-remote-tool
+  activity:
+    type: mcp.call_tool
+    input:
+      endpoint: "https://tools.example.com/mcp"
+      tool_name: "summarize_document"
+      arguments:
+        document_id: "{{ doc_id }}"
+      encrypted_auth_token: "{{ mcp_token }}"
+  output:
+    as: tool_run
+```
+
+`builtin.secret.get` returns a copy that expires (60 s by default), so fetch it right before the
+call. A server that wants its key in some other header (`X-API-Key`) still needs `headers`, with
+the plaintext caveat above.
+
 :::caution A failed tool call is not an activity failure
-An exception inside the streamer is logged and swallowed: the activity returns `stopped: true` with
+For `mcp.call_tool`, an exception inside the streamer is logged and swallowed: the activity returns `stopped: true` with
 `result: null`. Always check `result` explicitly rather than assuming a successful activity means a
 successful tool call.
 :::

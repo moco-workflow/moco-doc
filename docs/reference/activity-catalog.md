@@ -59,11 +59,11 @@ global one. See [Secret Activities](./activities/secret.md).
 
 Four exceptions are worth knowing:
 
-- [`http.request`](./activities/http.md#authentication) takes `encrypted_auth_token` — the still-encrypted
-  blob from `builtin.secret.get` — rather than a secret name.
-- [`graphql.subscribe`](./activities/graphql.md), [`websocket.subscribe`](./activities/websocket.md) and
-  [`mcp.call_tool`](./activities/mcp.md) authenticate with a plain `headers` dict, which passes
-  through workflow context in plaintext.
+- [`http.request`](./activities/http.md#authentication) and the [MCP activities](./activities/mcp.md#authentication)
+  take `encrypted_auth_token` — the still-encrypted blob from `builtin.secret.get` — rather than a
+  secret name, so the same field carries a static API key or a token obtained at run time.
+- [`graphql.subscribe`](./activities/graphql.md) and [`websocket.subscribe`](./activities/websocket.md)
+  authenticate with a plain `headers` dict, which passes through workflow context in plaintext.
 - [`langfuse.*`](./activities/langfuse.md) takes raw credentials inline; prefer configuring them as
   environment variables on the worker.
 - [`k8s.*`](./activities/k8s.md#setup) names its token and client key through `token_secret_key` and
@@ -128,6 +128,7 @@ browser session to one worker — and must not be overridden.
 | [State Store](./activities/state.md) | 8 | Durable key/value storage that outlives a run |
 | [Secrets](./activities/secret.md) | 4 | The secret store behind every `*_secret_key` field |
 | [Events & Metrics](./activities/event.md) | 2 | Debug events and metrics for observability |
+| [Schedules](./activities/schedule.md) | 8 | Managing a workflow's recurring runs from a workflow |
 | [HTTP](./activities/http.md) | 1 | Calling any HTTP service |
 | [Shell](./activities/shell.md) | 1 | Running a command on the worker |
 | [SQL](./activities/sql.md) | 2 | Parameterized queries and writes against PostgreSQL |
@@ -138,7 +139,7 @@ browser session to one worker — and must not be overridden.
 | [RabbitMQ](./activities/rabbit.md) | 2 | Publishing to and subscribing to RabbitMQ |
 | [GraphQL](./activities/graphql.md) | 1 | GraphQL subscriptions |
 | [WebSocket](./activities/websocket.md) | 1 | Generic WebSocket feeds |
-| [MCP](./activities/mcp.md) | 1 | Calling a remote MCP server's tools |
+| [MCP](./activities/mcp.md) | 2 | Listing and calling a remote MCP server's tools |
 | [OpenAI](./activities/openai.md) | 1 | Chat completions against any OpenAI-compatible endpoint |
 | [Claude Agent](./activities/claude-agent.md) | 1 | An autonomous agent loop with granted tools |
 | [LlamaIndex](./activities/llama-index.md) | 7 | Building and querying a vector index — RAG |
@@ -183,6 +184,19 @@ browser session to one worker — and must not be overridden.
 | [`builtin.secret.get`](./activities/secret.md#builtinsecretget) | Fetch a secret, still encrypted and short-lived |
 | [`builtin.secret.list`](./activities/secret.md#builtinsecretlist) | List secret names |
 | [`builtin.secret.delete`](./activities/secret.md#builtinsecretdelete) | Remove a secret |
+
+### Schedules
+
+| Activity | Description |
+| --- | --- |
+| [`builtin.schedule.create`](./activities/schedule.md#builtinschedulecreate) | Create a schedule, or replace one with the same name |
+| [`builtin.schedule.update`](./activities/schedule.md#builtinscheduleupdate) | Replace a schedule's workflow, timing and input |
+| [`builtin.schedule.describe`](./activities/schedule.md#builtinscheduledescribe) | A schedule's settings, next fires and recent runs |
+| [`builtin.schedule.list`](./activities/schedule.md#builtinschedulelist) | List the schedules the caller may see |
+| [`builtin.schedule.pause`](./activities/schedule.md#builtinschedulepause--builtinscheduleunpause) | Pause a schedule |
+| [`builtin.schedule.unpause`](./activities/schedule.md#builtinschedulepause--builtinscheduleunpause) | Resume a paused schedule |
+| [`builtin.schedule.trigger`](./activities/schedule.md#builtinscheduletrigger) | Run a schedule once now |
+| [`builtin.schedule.delete`](./activities/schedule.md#builtinscheduledelete) | Delete a schedule |
 
 ### Events and metrics
 
@@ -236,6 +250,7 @@ browser session to one worker — and must not be overridden.
 | [`graphql.subscribe`](./activities/graphql.md#graphqlsubscribe) | Hold a GraphQL subscription, relaying each payload |
 | [`websocket.subscribe`](./activities/websocket.md#websocketsubscribe) | Hold a WebSocket connection, relaying each frame |
 | [`mcp.call_tool`](./activities/mcp.md#mcpcall_tool) | Call a remote MCP tool, relaying its progress |
+| [`mcp.list_tools`](./activities/mcp.md#mcplist_tools) | List a remote MCP server's tools, with hashes for drift detection |
 
 ### AI
 
@@ -250,6 +265,7 @@ browser session to one worker — and must not be overridden.
 | [`llama_index.index_files`](./activities/llama-index.md#llama_indexindex_files) | Index files on the worker's disk |
 | [`llama_index.index_docs`](./activities/llama-index.md#llama_indexindex_docs) | **Deprecated** — use `llama_index.index_web` |
 | [`llama_index.query`](./activities/llama-index.md#llama_indexquery) | Semantic search, retrieving chunks or synthesizing an answer |
+| [`llama_index.drop_table`](./activities/llama-index.md#llama_indexdrop_table) | Drop an index's table and all its chunks |
 | [`langfuse.run_experiment`](./activities/langfuse.md#langfuserun_experiment) | Offline evaluation over a Langfuse dataset |
 | [`langfuse.create_score`](./activities/langfuse.md#langfusecreate_score) | Attach scores to the running workflow's trace |
 | [`typesafe.system_one`](./activities/typesafe.md#typesafesystem_one) | Answer named noul/choice/score questions about text or JSON |

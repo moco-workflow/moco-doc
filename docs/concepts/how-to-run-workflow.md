@@ -217,6 +217,9 @@ the useful retry boundary is almost always the individual activity — retrying 
 re-run everything that already succeeded. Set `max_attempts` at the workflow level only when the
 whole spec is idempotent.
 
+This run-level policy is passed by the caller and is not part of the spec, so its values are plain
+numbers, never expressions.
+
 This policy governs the run as a whole. Individual activities carry their own retry policy in the
 spec — `options.retry_policy` on the `activity` task, over a document-wide default in
 `header.metadata.default_activity_retry_policy` — and that is the level to tune first:
@@ -230,6 +233,9 @@ header:
       timeout_sec: 60
       max_attempts: 3
 
+input:
+  fast: false
+
 main:
   task_name: fetch
   activity:
@@ -240,6 +246,7 @@ main:
     options:
       retry_policy:
         max_attempts: 5        # overrides the default, key by key
+        timeout_sec: '{{ 30 if fast else 120 }}'   # spec-level fields may be expressions
 ```
 
 See the [`activity` task](../reference/statements.md).

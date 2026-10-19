@@ -4,12 +4,12 @@ sidebar_label: LlamaIndex (RAG)
 
 # LlamaIndex Activities
 
-Seven activities build and query a vector index over your own documents, so an LLM can answer from
+Eight activities build, query and drop a vector index over your own documents, so an LLM can answer from
 them instead of from its training data — retrieval-augmented generation.
 
 Documents are chunked and embedded into a [pgvector](https://github.com/pgvector/pgvector) table by
 one of the `llama_index.index_*` activities, and `llama_index.query` finds the chunks closest to a
-question.
+question. `llama_index.drop_table` deletes an index once it is no longer needed.
 
 There is one indexing activity per document source:
 
@@ -34,7 +34,7 @@ the embedding model **must** be identical on both sides, or the similarity score
 ```yaml
 context:
   vectordb_info:
-    connection_string_secret_key: "MOCO_PGVECTOR_CONN"  # postgresql://... in the secret store
+    connection_string_secret_key: "MOCO_PGVECTOR_CONN"  # secret holding postgresql://...; omit to use the MOCO_PGVECTOR_CONN env var
     table_name: "product_docs"                          # physical table is data_product_docs
   embed_model_info:
     apikey_secret_key: "MY_LLM_TOKEN"
@@ -47,7 +47,7 @@ context:
 
 | Field | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
-| `connection_string_secret_key` | str | yes | — | Secret name holding a `postgresql://` connection string |
+| `connection_string_secret_key` | str | no | the `MOCO_PGVECTOR_CONN` environment variable | Secret name holding a `postgresql://` connection string |
 | `table_name` | str | yes | — | Logical table name; the physical table is `data_<table_name>` |
 | `schema_name` | str | no | `"public"` | PostgreSQL schema |
 
@@ -55,7 +55,7 @@ context:
 
 | Field | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
-| `apikey_secret_key` | str | yes | — | Secret name holding the embedding API key |
+| `apikey_secret_key` | str | no | a placeholder key | Secret name holding the embedding API key. Leave unset or empty for an endpoint that needs no key, such as Ollama |
 | `base_url` | str | no | `MOCO_LLM_DEFAULT_EMBED_MODEL_BASE_URL`, then `MOCO_LLM_DEFAULT_BASE_URL` | OpenAI-compatible endpoint, version path included |
 | `model_name` | str | no | `MOCO_LLM_DEFAULT_EMBED_MODEL_NAME` | Embedding model |
 | `embed_dim` | int | no | `1536` | Vector dimension; must match the model and the existing table |
@@ -81,6 +81,7 @@ That is `https://my-gateway/v1` for most gateways, `http://localhost:11434/v1` f
 | Variable | Used by |
 | --- | --- |
 | `MOCO_LLM_DEFAULT_BASE_URL`, `MOCO_LLM_DEFAULT_MODEL_NAME`, `MOCO_LLM_DEFAULT_EMBED_MODEL_BASE_URL`, `MOCO_LLM_DEFAULT_EMBED_MODEL_NAME` | Model defaults |
+| `MOCO_PGVECTOR_CONN` | The `postgresql://` connection string itself, used when `connection_string_secret_key` is unset or empty |
 | `MOCO_RAG_FILE_DIR` | Root for `index_files`; a path escaping it is rejected |
 | `MOCO_HTTP_PROXY` | The `download` and `readability` web loaders |
 | `MOCO_CHROME_DRIVER_PATH`, `MOCO_CHROME_PATH` | The `whole_site` crawler only |
@@ -120,7 +121,7 @@ Every `index_*` activity except the deprecated `index_docs` returns:
 | --- | --- | --- |
 | `index_web`, `index_files`, `index_docs` | 600 s | 1 |
 | `index_site`, `index_github`, `index_gdrive` | 1800 s | 1 |
-| `query` | 120 s | 3 |
+| `query`, `drop_table` | 120 s | 3 |
 
 :::note Indexing is never retried
 Every `index_*` activity writes rows and ships `max_attempts: 1` — a retry would duplicate chunks
@@ -522,6 +523,39 @@ embedding one, since the two usually share a gateway):
 
 A complete runnable example, contrasting both query modes over the same question, lives in
 `moco-examples/activities/llama-index.yaml`.
+
+---
+
+## `llama_index.drop_table`
+
+Drops the table behind an index (`data_<table_name>`), deleting every chunk in it. Dropping a table
+that does not exist is not an error, so the activity is safe to retry.
+
+**Input**
+
+| Field | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `vectordb_info` | [VectorDbInfo](#vectordbinfo) | yes | — | Index to drop |
+
+**Output**
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `table_name` | str | The logical table name |
+| `dropped` | bool | `true` if the table existed and was dropped, `false` if there was nothing to drop |
+
+**Example**
+
+```yaml
+- task_name: drop-index
+  activity:
+    type: llama_index.drop_table
+    input:
+      vectordb_info:
+        table_name: "product_docs"   # connection from MOCO_PGVECTOR_CONN
+  output:
+    as: drop_result                  # -> table_name, dropped
+```
 
 ---
 

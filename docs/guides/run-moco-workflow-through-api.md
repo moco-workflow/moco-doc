@@ -296,6 +296,10 @@ default to a **single attempt**: Moco does not retry a whole workflow unless you
 activity-level retries are usually what you want. Only the Temporal runtime honors these settings;
 the in-memory runtime ignores them.
 
+Values here are plain JSON numbers: the API does not evaluate `{{ }}` expressions in run options.
+To compute a policy from the run's data, write it in the spec instead — see
+[Computed retry policies](../reference/workflowspec-reference.md#computed-retry-policies).
+
 Under `execute_mode: "standalone-activity"` the same object also carries `heartbeat_timeout_sec` and
 `heartbeat_interval_sec`, which default to 60 s and 20 s so Temporal can detect a dead worker.
 
