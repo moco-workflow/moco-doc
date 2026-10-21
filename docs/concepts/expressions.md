@@ -149,7 +149,8 @@ Keep `{{ }}` as text, for a template meant to be rendered later or by another sy
 ### `#jinja`
 
 Render with Jinja2, which has statements (`if`, `for`) and filters that a single Python expression
-cannot express. Every visible variable is in the template's context:
+cannot express. Every visible variable is in the template's context. Enabled by default; an
+operator can turn it off by setting `MOCO_ENABLE_JINJA=false` on the server and workers:
 
 ```yaml
 - set:
@@ -164,7 +165,8 @@ cannot express. Every visible variable is in the template's context:
 ### `#python_glom`
 
 The value is a Python expression for a [glom](https://glom.readthedocs.io) spec, applied to
-`__context__`. A path must therefore be a **quoted string**:
+`__context__`. A path must therefore be a **quoted string**. Disabled by default: the server and
+workers need `MOCO_ENABLE_GLOM=true`, which also makes the `glom` module available inside `{{ }}`:
 
 ```yaml
 - set:

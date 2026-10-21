@@ -441,8 +441,8 @@ value is stored (`report#jinja` stores `report`).
 |---|---|
 | `#python` | Python expression in `{{ }}` (the default) |
 | `#literal` | None. The value is kept exactly as written, braces included |
-| `#jinja` | Rendered as a sandboxed Jinja2 template, with every visible variable available. Use it for `{% if %}` / `{% for %}` and filters |
-| `#python_glom` | The value is a glom spec, applied to `__context__`: `glom(__context__, <value>)`. A path must be a quoted Python string |
+| `#jinja` | Rendered as a sandboxed Jinja2 template, with every visible variable available. Use it for `{% if %}` / `{% for %}` and filters. Turned off when the deployment sets `MOCO_ENABLE_JINJA=false` |
+| `#python_glom` | The value is a glom spec, applied to `__context__`: `glom(__context__, <value>)`. A path must be a quoted Python string. Off unless the deployment sets `MOCO_ENABLE_GLOM=true` |
 
 ```yaml
 header:

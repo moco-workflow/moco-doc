@@ -589,7 +589,7 @@ If your editor supports the YAML language server, point a file at the schema dir
 autocompletion without the extension:
 
 ```yaml
-# yaml-language-server: $schema=<path-to>/workflowspec_v2_schema.json
+# yaml-language-server: $schema=<path-to>/workflowspec_schema.json
 ```
 
 ## Next steps
